@@ -1,0 +1,35 @@
+{
+  "name": "Signals",
+  "version": "1.0.0",
+  "description": "ESP32 library to control an ATtiny receiver via UART (NeoPixel + speaker) using a simple ASCII protocol.",
+  "keywords": [
+    "uart",
+    "serial",
+    "neopixel",
+    "ws2812",
+    "speaker",
+    "pwm",
+    "attiny"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://dk8.de"
+  },
+  "authors": [
+    {
+      "name": "Joerg Koerner",
+      "email": "joerg@dk8.de",
+      "maintainer": true
+    }
+  ],
+  "license": "LGPL-2.1-or-later",
+  "frameworks": [
+    "arduino"
+  ],
+  "platforms": [
+    "espressif32"
+  ],
+  "headers": [
+    "Signals.h"
+  ]
+}

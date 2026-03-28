@@ -1,0 +1,2 @@
+# Nur für tools/png_to_lvgl8_bin.py (PNG-Konvertierung)
+pillow>=10.0.0
