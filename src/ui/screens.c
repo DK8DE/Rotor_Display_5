@@ -13,7 +13,7 @@
 objects_t objects;
 
 static const char *screen_names[] = { "Main" };
-static const char *object_names[] = { "main", "kompass_bg", "grad_acc", "hauptanzeige", "position", "label_gradzeichen_a", "label_gradzeichen_t", "actual_dg", "taget_dg", "label_actual", "meldetext", "label_target", "homing_led", "fast_menue_1", "antenna_1", "antenna_1_label", "antenna_2", "antenna_2_label", "antenna_3", "antenna_3_label", "fast_menue", "slow_speed", "slow_speed_label", "fast_speed", "fast_speed_label", "ref_label", "temperaturen_wind", "label_wind_speed", "pfeil_wind", "label_aussen_temp", "engine_temperature", "wind_speed" };
+static const char *object_names[] = { "main", "kompass_bg", "grad_acc", "hauptanzeige", "position", "label_gradzeichen_a", "label_gradzeichen_t", "actual_dg", "taget_dg", "label_actual", "meldetext", "label_target", "homing_led", "fast_menue_1", "antenna_1", "antenna_1_label", "antenna_2", "antenna_2_label", "antenna_3", "antenna_3_label", "fast_menue", "speed_anzeige", "label_actual_1", "speed_slider", "ref_label", "temperaturen_wind", "label_wind_speed", "pfeil_wind", "label_aussen_temp", "engine_temperature", "wind_speed" };
 
 //
 // Event handlers
@@ -209,7 +209,7 @@ void create_screen_main() {
                                     lv_obj_set_pos(obj, 0, 0);
                                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_label_set_text(obj, "KW Beam");
                                 }
                             }
@@ -229,7 +229,7 @@ void create_screen_main() {
                                     lv_obj_set_pos(obj, 0, 1);
                                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_label_set_text(obj, "2m / 70cm");
                                 }
                             }
@@ -249,7 +249,7 @@ void create_screen_main() {
                                     lv_obj_set_pos(obj, 0, 0);
                                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_label_set_text(obj, "23 cm");
                                 }
                             }
@@ -268,45 +268,36 @@ void create_screen_main() {
                     {
                         lv_obj_t *parent_obj = obj;
                         {
-                            // slow speed
-                            lv_obj_t *obj = lv_btn_create(parent_obj);
-                            objects.slow_speed = obj;
-                            lv_obj_set_pos(obj, 44, 98);
-                            lv_obj_set_size(obj, 158, 44);
-                            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff2196f3), LV_PART_MAIN | LV_STATE_DEFAULT);
-                            {
-                                lv_obj_t *parent_obj = obj;
-                                {
-                                    // slow speed label
-                                    lv_obj_t *obj = lv_label_create(parent_obj);
-                                    objects.slow_speed_label = obj;
-                                    lv_obj_set_pos(obj, 0, 0);
-                                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_label_set_text(obj, "Slow Speed");
-                                }
-                            }
+                            // Speed_Anzeige
+                            lv_obj_t *obj = lv_textarea_create(parent_obj);
+                            objects.speed_anzeige = obj;
+                            lv_obj_set_pos(obj, 44, 50);
+                            lv_obj_set_size(obj, 150, 35);
+                            lv_textarea_set_accepted_chars(obj, "1234567890");
+                            lv_textarea_set_max_length(obj, 3);
+                            lv_textarea_set_text(obj, "100");
+                            lv_textarea_set_placeholder_text(obj, "100");
+                            lv_textarea_set_one_line(obj, true);
+                            lv_textarea_set_password_mode(obj, false);
+                            add_style_grosse_zahlen(obj);
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
                         }
                         {
-                            // fast speed
-                            lv_obj_t *obj = lv_btn_create(parent_obj);
-                            objects.fast_speed = obj;
-                            lv_obj_set_pos(obj, 44, 15);
-                            lv_obj_set_size(obj, 158, 44);
-                            {
-                                lv_obj_t *parent_obj = obj;
-                                {
-                                    // fast speed label
-                                    lv_obj_t *obj = lv_label_create(parent_obj);
-                                    objects.fast_speed_label = obj;
-                                    lv_obj_set_pos(obj, 0, 0);
-                                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_label_set_text(obj, "Fast Speed");
-                                }
-                            }
+                            // Label Actual_1
+                            lv_obj_t *obj = lv_label_create(parent_obj);
+                            objects.label_actual_1 = obj;
+                            lv_obj_set_pos(obj, 202, 54);
+                            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_label_set_text(obj, "%");
+                        }
+                        {
+                            // Speed_Slider
+                            lv_obj_t *obj = lv_slider_create(parent_obj);
+                            objects.speed_slider = obj;
+                            lv_obj_set_pos(obj, 0, 117);
+                            lv_obj_set_size(obj, 248, 10);
+                            lv_slider_set_value(obj, 100, LV_ANIM_OFF);
                         }
                         {
                             lv_obj_t *obj = lv_btn_create(parent_obj);
@@ -318,10 +309,10 @@ void create_screen_main() {
                                     // REF LABEL
                                     lv_obj_t *obj = lv_label_create(parent_obj);
                                     objects.ref_label = obj;
-                                    lv_obj_set_pos(obj, 0, 0);
+                                    lv_obj_set_pos(obj, 0, -1);
                                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_20, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_32, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_label_set_text(obj, "Homing");
                                 }
                             }

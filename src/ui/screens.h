@@ -37,10 +37,9 @@ typedef struct _objects_t {
     lv_obj_t *antenna_3;
     lv_obj_t *antenna_3_label;
     lv_obj_t *fast_menue;
-    lv_obj_t *slow_speed;
-    lv_obj_t *slow_speed_label;
-    lv_obj_t *fast_speed;
-    lv_obj_t *fast_speed_label;
+    lv_obj_t *speed_anzeige;
+    lv_obj_t *label_actual_1;
+    lv_obj_t *speed_slider;
     lv_obj_t *ref_label;
     lv_obj_t *temperaturen_wind;
     lv_obj_t *label_wind_speed;

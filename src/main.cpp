@@ -11,6 +11,7 @@
 #include <Signals.h>
 // WICHTIG: Lokalen UI-Wrapper verwenden (EEZ-Studio UI liegt unter "src/ui/")
 #include "ui.h"
+#include "serial_bridge.h"
 
 /** Signals → ATtiny: nur TX, wie im SignalsDemo (Serial1). */
 static constexpr int8_t SIGNALS_TX_PIN = 40;
@@ -129,6 +130,7 @@ static void LongPressStartCb(void *button_handle, void *usr_data) {
 void setup()
 {
     Serial.begin(115200);
+    serial_bridge::begin();
 
     Serial.println("Signals boot (TX GPIO40) …");
     signals_play_boot_welcome();
@@ -220,6 +222,5 @@ void setup()
 
 void loop()
 {
-    Serial.println("IDLE loop");
-    delay(1000);
+    serial_bridge::poll();
 }
