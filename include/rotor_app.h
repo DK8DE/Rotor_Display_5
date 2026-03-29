@@ -7,6 +7,9 @@ extern "C" {
 /** Nach ui_init() aufrufen (mit LVGL-Lock wie in main). Registriert Homing-Button, RS485, erste GETREF. */
 void rotor_app_init(void);
 
+/** Slow/Fast-SETPWM: erneuter Versuch wenn Bus frei (nach Klick) + einmal Boot Fast-PWM. */
+void rotor_pwm_ui_loop(void);
+
 /**
  * Encoder: delta_tenths = Änderung in Zehntelgraden (Skalierung z. B. in main).
  * SETPOSDG erst nach 200 ms ohne neuen Tick; rotor_app_loop() aus loop() aufrufen (Retry bei blockiertem Bus).

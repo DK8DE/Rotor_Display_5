@@ -11,7 +11,9 @@
 // WICHTIG: Lokalen UI-Wrapper verwenden (EEZ-Studio UI liegt unter "src/ui/")
 #include "ui.h"
 #include "serial_bridge.h"
+#include "pwm_config.h"
 #include "rotor_app.h"
+#include "rotor_error_app.h"
 #include "rotor_rs485.h"
 #include "signals_ring_app.h"
 
@@ -101,7 +103,7 @@ static constexpr int ENCODER_DELTA_TENTHS_PER_STEP = 10;
  * Vorher 200 ns ≈ aus; mechanische Drehgeber profitieren oft von 2–10 µs.
  * Zu groß: sehr schnelles Drehen kann Schritte „verschlucken“. 0 = Filter aus.
  */
-static constexpr uint32_t ENCODER_GLITCH_NS = 5000u;
+static constexpr uint32_t ENCODER_GLITCH_NS = 8000u;
 
 /** Quadratur-Encoder über PCNT (UltraEncoderPCNT). */
 static UltraEncoderPCNT *s_ultra_enc = nullptr;
@@ -119,6 +121,14 @@ static void SingleClickCb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
+    /* Fehler aktiv (GETERR/async ERR): immer SETREF (Homing + Quittierung) — vor Snap/Stop/„nur wenn nicht ref.“ */
+    if (rotor_error_app_encoder_click_triggers_homing_only()) {
+        rotor_rs485_send_setref_homing();
+        lvgl_port_lock(-1);
+        LVGL_button_event((void *)(intptr_t)BUTTON_SINGLE_CLICK);
+        lvgl_port_unlock();
+        return;
+    }
     if (rotor_rs485_is_position_polling()) {
         /* Soll = Ist: Encoder-Session löschen (sonst kein taget + altes SETPOS aus rotor_app_loop) */
         const float snap = rotor_rs485_get_last_position_deg();
@@ -158,6 +168,7 @@ void setup()
     } else {
         Serial.printf("FFat OK, %.1f KB free\n", FFat.freeBytes() / 1024.0f);
     }
+    pwm_config_load();
     // esp_log_level_set("*", ESP_LOG_NONE);
   
   // Initialize UART0
@@ -237,7 +248,9 @@ void loop()
     serial_bridge::poll();
     /* Encoder-SETPOS-Retry sofort nach frei werdendem Bus, bevor wieder GETPOSDG gestartet wird */
     rotor_app_loop();
+    rotor_pwm_ui_loop();
     rotor_rs485_loop();
+    rotor_error_app_loop(millis());
     signals_ring_app_loop(millis());
 
     rotor_app_loop();

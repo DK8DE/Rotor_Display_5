@@ -8,6 +8,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/** Broadcast-Ziel (SETASELECT u. a.) — CS = SRC + 255 + letzte Zahl in PARAMS */
+#ifndef ROTOR_RS485_BROADCAST_ID
+#define ROTOR_RS485_BROADCAST_ID 255u
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -29,6 +34,8 @@ void rotor_rs485_set_slave_id(uint8_t id);
 
 /** Boot: 2 s nach Start erste GETREF, dann optional GETPOSDG (nur wenn referenziert). */
 void rotor_rs485_init(void);
+/** True nach erstem abgeschlossenen Boot-Handshake (GETREF/ggf. GETPOSDG). */
+bool rotor_rs485_is_boot_done(void);
 /**
  * Rohdaten vom RS485-UART (z. B. von serial_bridge nach HW→USB-Spiegelung).
  * Verarbeitet denselben Byte-Strom wie früher drain_rx intern.
@@ -85,6 +92,17 @@ bool rotor_rs485_goto_degrees(float deg);
  * und ACK_SETPOSDG eintrifft (sonst Retry in rotor_rs485_loop nach Timeout / wenn goto_degrees fehlschlug).
  */
 void rotor_rs485_hw_snap_retarget_request(float deg);
+
+/**
+ * SETPWM: PWM-Limit 0…100 % (Laufzeit, ohne NVS). true wenn das Telegramm gestartet wurde.
+ * Bei blockiertem Bus (anderes Pending) false — Aufrufer kann später erneut versuchen.
+ */
+bool rotor_rs485_send_set_pwm_limit(uint8_t pct);
+
+/**
+ * SETASELECT:1…3 an Broadcast (255), kein ACK — gleicher Pfad wie andere Befehle (USB + RS485).
+ */
+void rotor_rs485_send_setaselect(uint8_t antenna_1_to_3);
 
 #ifdef __cplusplus
 }

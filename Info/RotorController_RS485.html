@@ -2064,6 +2064,7 @@
 <tr><td>15</td><td><code>SE_IS_HARD</code></td><td>Strom-Hardlimit</td><td>Zu hoher Motorstrom länger als Hold</td><td>Mechanik prüfen, IMAX/Grace/Hold prüfen, dann SETREF</td></tr>
 <tr><td>16</td><td><code>SE_STALL</code></td><td>Stall: Encoder bewegt sich nicht</td><td>PWM an, aber zu wenige Encoder-Counts im Timeout</td><td>Mechanik/Haftreibung, MINPWM/KICK/STALLTIMEOUT anpassen, dann SETREF</td></tr>
 <tr><td>17</td><td><code>SE_HOME_FAIL</code></td><td>Homing fehlgeschlagen</td><td>Timeout in Homing-Phase oder Endschalterproblem</td><td>Endschalter, Counts-Parameter, HOMETIMEOUT prüfen, dann SETREF</td></tr>
+<tr><td>18</td><td><code>SE_POS_TIMEOUT</code></td><td>Positionsfahrt: Ziel nicht innerhalb der eingestellten Zeit erreicht</td><td>Die Fahrt zur Zielposition dauert länger als das konfigurierte Positions‑Timeout</td><td><code>SETPOSTIMEOUT</code> hochsetzen, Mechanik prüfen (Haftreibung, Blockade, Antrieb), dann SETREF</td></tr>
 </table>
 <div class="toplink"><a href="#toc">↑ Inhaltsverzeichnis</a></div>
 </section>

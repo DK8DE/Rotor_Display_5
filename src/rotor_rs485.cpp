@@ -4,6 +4,7 @@
  * CS-Format wie _fmt_cs: ganzzahlig ohne ",00", sonst bis zu zwei Nachkommastellen (Komma).
  *
  * Bus-Regel: Pro Anfrage ein ausstehendes Telegramm; nächste Anfrage erst nach ACK (oder Timeout).
+ * SETASELECT (DST 255): kein Pending/ACK — sofort senden.
  */
 
 #include "rotor_rs485.h"
@@ -15,7 +16,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "pwm_config.h"
+#include "rotor_error_app.h"
 #include "serial_bridge.h"
+
+extern "C" void rotor_app_antenna_offset_changed(void);
+extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3);
 
 #ifndef ROTOR_RS485_MASTER_ID
 #define ROTOR_RS485_MASTER_ID 2u
@@ -50,7 +56,24 @@
 #define ROTOR_PERIODIC_GETREF_MS 5000u
 #endif
 
-enum class Pending : uint8_t { None, GetRef, GetPosDg, SetPosDg, SetRef, Stop };
+#ifndef ROTOR_POLL_GETERR_MS
+/** GETERR zyklisch — wie periodisches GETREF (5 s), nicht Bus fluten */
+#define ROTOR_POLL_GETERR_MS 5000u
+#endif
+
+enum class Pending : uint8_t {
+    None,
+    GetRef,
+    GetPosDg,
+    SetPosDg,
+    SetRef,
+    Stop,
+    GetErr,
+    SetPwm,
+    GetAntOff1,
+    GetAntOff2,
+    GetAntOff3
+};
 
 static uint8_t s_master_id = ROTOR_RS485_MASTER_ID;
 static uint8_t s_slave_id = ROTOR_RS485_SLAVE_ID;
@@ -92,10 +115,25 @@ static bool s_slave_referenced = false;
 static float s_last_pos_ui_deg = 0.0f;
 /** GETREF alle ROTOR_PERIODIC_GETREF_MS nach Boot, solange kein Homing-Polling */
 static uint32_t s_next_periodic_getref_ms = 0;
+/** GETERR zyklisch (Fehlercode / Betriebsbereit) */
+static uint32_t s_next_geterr_ms = 0;
 
 /** HW-Taster: Soll = Ist — SETPOSDG wiederholen bis ACK (Bus busy / kein ACK). */
 static bool s_hw_snap_retarget_active = false;
 static float s_hw_snap_retarget_deg = 0.0f;
+
+/** SETPWM: zuletzt gesendeter Wert (Timeout-Retry) */
+static uint8_t s_setpwm_value = 0;
+
+/** Nach Boot: GETANTOFF1→2→3 (Versätze vom Rotor); phase 0 = GET1 noch nicht gesendet */
+static bool s_antenna_boot_pending = true;
+static uint8_t s_antenna_boot_phase = 0;
+
+static void abort_antenna_boot(void)
+{
+    s_antenna_boot_pending = false;
+    s_antenna_boot_phase = 0;
+}
 
 static void notify_target(float deg);
 
@@ -105,6 +143,8 @@ void rotor_rs485_set_slave_id(uint8_t id) { s_slave_id = id; }
 void rotor_rs485_set_ref_callback(rotor_rs485_ref_cb_t cb) { s_ref_cb = cb; }
 void rotor_rs485_set_position_callback(rotor_rs485_pos_cb_t cb) { s_pos_cb = cb; }
 void rotor_rs485_set_target_callback(rotor_rs485_target_cb_t cb) { s_target_cb = cb; }
+
+bool rotor_rs485_is_boot_done(void) { return s_boot_done; }
 
 bool rotor_rs485_is_referenced(void) { return s_slave_referenced; }
 
@@ -254,15 +294,20 @@ static void format_cs_python(char *out, size_t out_sz, float cs)
     snprintf(out, out_sz, "%s", tmp);
 }
 
-static void send_line(const char *cmd, const char *params_str)
+static void send_line_to(uint8_t dst, const char *cmd, const char *params_str)
 {
     float last = last_number_in_params_python(params_str);
-    float cs_val = (float)s_master_id + (float)s_slave_id + last;
+    float cs_val = (float)s_master_id + (float)dst + last;
     char cs[32];
     format_cs_python(cs, sizeof(cs), cs_val);
     char line[192];
-    snprintf(line, sizeof(line), "#%u:%u:%s:%s:%s$", (unsigned)s_master_id, (unsigned)s_slave_id, cmd, params_str, cs);
+    snprintf(line, sizeof(line), "#%u:%u:%s:%s:%s$", (unsigned)s_master_id, (unsigned)dst, cmd, params_str, cs);
     serial_bridge::hw_send(reinterpret_cast<const uint8_t *>(line), strlen(line));
+}
+
+static void send_line(const char *cmd, const char *params_str)
+{
+    send_line_to(s_slave_id, cmd, params_str);
 }
 
 static void send_request(const char *cmd, const char *params_str, Pending p)
@@ -326,6 +371,40 @@ void rotor_rs485_send_getposdg(void)
     send_request("GETPOSDG", "0", Pending::GetPosDg);
 }
 
+void rotor_rs485_send_setaselect(uint8_t antenna_1_to_3)
+{
+    if (antenna_1_to_3 < 1u || antenna_1_to_3 > 3u) {
+        return;
+    }
+    char p[8];
+    snprintf(p, sizeof(p), "%u", (unsigned)antenna_1_to_3);
+    send_line_to(ROTOR_RS485_BROADCAST_ID, "SETASELECT", p);
+}
+
+bool rotor_rs485_send_set_pwm_limit(uint8_t pct)
+{
+    if (pct > 100u) {
+        pct = 100u;
+    }
+    /* Während Positionsfahrt: GETPOSDG-Polling kurz unterbrechen — SETPWM muss durch (Geschwindigkeit ändern). */
+    if (s_pending == Pending::GetPosDg) {
+        clear_pending();
+    }
+    if (s_pending == Pending::GetAntOff1 || s_pending == Pending::GetAntOff2 ||
+        s_pending == Pending::GetAntOff3) {
+        clear_pending();
+        abort_antenna_boot();
+    }
+    if (s_pending != Pending::None) {
+        return false;
+    }
+    char p[16];
+    snprintf(p, sizeof(p), "%u", (unsigned)pct);
+    s_setpwm_value = pct;
+    send_request("SETPWM", p, Pending::SetPwm);
+    return true;
+}
+
 bool rotor_rs485_goto_degrees(float deg)
 {
     /* SETPOSDG darf nicht unterbrochen werden. Ein ausstehendes GETPOSDG (Positions-Polling)
@@ -336,6 +415,11 @@ bool rotor_rs485_goto_degrees(float deg)
     }
     if (s_pending == Pending::GetPosDg) {
         clear_pending();
+    }
+    if (s_pending == Pending::GetAntOff1 || s_pending == Pending::GetAntOff2 ||
+        s_pending == Pending::GetAntOff3) {
+        clear_pending();
+        abort_antenna_boot();
     }
     if (s_pending != Pending::None) {
         return false;
@@ -349,8 +433,8 @@ bool rotor_rs485_goto_degrees(float deg)
     s_pos_grace_end_ms = 0;
     s_next_pos_poll_ms = 0;
     send_request("SETPOSDG", p, Pending::SetPosDg);
-    /* taget_dg sofort wie übergebener Soll (Ist bei „Taster: Ziel = hier“); gleicher Winkel wie Bus nach normalize */
-    notify_target(deg);
+    /* Callback: Bus-Ist/Soll (normalisiert), UI rechnet Antennenversatz um */
+    notify_target(n);
     return true;
 }
 
@@ -405,6 +489,25 @@ static bool line_src_dst(const char *line, unsigned *src_out, unsigned *dst_out)
     return true;
 }
 
+/** Parameter nach :SETASELECT: (1…3) */
+static bool parse_setaselect_antenna_1_to_3(const char *line, unsigned *out_v)
+{
+    const char *p = strstr(line, ":SETASELECT:");
+    if (!p) {
+        return false;
+    }
+    p += strlen(":SETASELECT:");
+    unsigned v = 0;
+    if (sscanf(p, "%u", &v) != 1) {
+        return false;
+    }
+    if (v < 1u || v > 3u) {
+        return false;
+    }
+    *out_v = v;
+    return true;
+}
+
 /** Erster Parameter nach :SETPOSDG: (Grad, Komma erlaubt) — nur echte Befehlszeile, nicht ACK_SETPOSDG */
 static bool parse_setposdg_command_deg(const char *line, float *out_deg)
 {
@@ -427,12 +530,45 @@ static bool parse_setposdg_command_deg(const char *line, float *out_deg)
     return true;
 }
 
+/** Fremd-Master (USB): SETANTOFFn an Slave — Versatz übernehmen */
+static void sniff_setantoff_to_slave(const char *line)
+{
+    static const struct {
+        const char *tag;
+        int idx;
+    } tags[] = {
+        {":SETANTOFF1:", 1},
+        {":SETANTOFF2:", 2},
+        {":SETANTOFF3:", 3},
+    };
+    for (size_t i = 0; i < 3; i++) {
+        const char *p = strstr(line, tags[i].tag);
+        if (!p) {
+            continue;
+        }
+        p += strlen(tags[i].tag);
+        char tmp[32];
+        size_t n = 0;
+        while (*p && *p != ':' && *p != '$' && n + 1 < sizeof(tmp)) {
+            tmp[n++] = (*p == ',') ? '.' : *p;
+            p++;
+        }
+        tmp[n] = '\0';
+        const float v = normalize_deg_0_360(strtof(tmp, nullptr));
+        pwm_config_set_antoff_deg(tags[i].idx, v);
+        pwm_config_save();
+        rotor_app_antenna_offset_changed();
+        return;
+    }
+}
+
 static void dispatch_bus_command_to_slave(const char *line)
 {
     float deg = 0.0f;
     if (parse_setposdg_command_deg(line, &deg)) {
         notify_target(deg);
     }
+    sniff_setantoff_to_slave(line);
 }
 
 static void on_ack_timeout()
@@ -440,12 +576,48 @@ static void on_ack_timeout()
     if (!pending_timed_out()) {
         return;
     }
-    Pending was = s_pending;
-    clear_pending();
-
-    /* Boot: GETREF erneut versuchen solange Phase 1 und noch kein Abschluss */
-    if (!s_boot_done && s_boot_phase == 1 && was == Pending::GetRef) {
+    /* Kein clear_pending: dasselbe Telegramm erneut (Kollision / fehlendes ACK). */
+    switch (s_pending) {
+    case Pending::GetRef:
         send_request("GETREF", "0", Pending::GetRef);
+        break;
+    case Pending::GetPosDg:
+        send_request("GETPOSDG", "0", Pending::GetPosDg);
+        break;
+    case Pending::SetPosDg: {
+        char p[40];
+        format_deg_param(p, sizeof(p), normalize_deg_0_360(s_goto_commanded_deg));
+        send_request("SETPOSDG", p, Pending::SetPosDg);
+        break;
+    }
+    case Pending::SetRef:
+        send_request("SETREF", "1", Pending::SetRef);
+        break;
+    case Pending::Stop:
+        send_request("STOP", "0", Pending::Stop);
+        break;
+    case Pending::GetErr:
+        send_request("GETERR", "0", Pending::GetErr);
+        break;
+    case Pending::SetPwm: {
+        char p[16];
+        snprintf(p, sizeof(p), "%u", (unsigned)s_setpwm_value);
+        send_request("SETPWM", p, Pending::SetPwm);
+        break;
+    }
+    case Pending::GetAntOff1:
+        send_request("GETANTOFF1", "1", Pending::GetAntOff1);
+        break;
+    case Pending::GetAntOff2:
+        send_request("GETANTOFF2", "1", Pending::GetAntOff2);
+        break;
+    case Pending::GetAntOff3:
+        send_request("GETANTOFF3", "1", Pending::GetAntOff3);
+        break;
+    case Pending::None:
+    default:
+        clear_pending();
+        break;
     }
 }
 
@@ -488,6 +660,99 @@ static bool parse_ack_stop(const char *line)
     }
     if (s_pending == Pending::Stop) {
         clear_pending();
+    }
+    return true;
+}
+
+static bool parse_ack_setpwm(const char *line)
+{
+    if (!strstr(line, ":ACK_SETPWM:")) {
+        return false;
+    }
+    if (s_pending == Pending::SetPwm) {
+        clear_pending();
+    }
+    return true;
+}
+
+static float parse_ack_antoff_value_after_tag(const char *line, const char *ack_tag)
+{
+    const char *p = strstr(line, ack_tag);
+    if (!p) {
+        return NAN;
+    }
+    p += strlen(ack_tag);
+    char tmp[32];
+    size_t n = 0;
+    while (*p && *p != ':' && *p != '$' && n + 1 < sizeof(tmp)) {
+        tmp[n++] = (*p == ',') ? '.' : *p;
+        p++;
+    }
+    tmp[n] = '\0';
+    if (n == 0) {
+        return NAN;
+    }
+    return strtof(tmp, nullptr);
+}
+
+static bool parse_ack_getantoff1(const char *line)
+{
+    if (!strstr(line, ":ACK_GETANTOFF1:")) {
+        return false;
+    }
+    const float v = parse_ack_antoff_value_after_tag(line, ":ACK_GETANTOFF1:");
+    if (v == v) {
+        pwm_config_set_antoff_deg(1, normalize_deg_0_360(v));
+    }
+    const bool was = (s_pending == Pending::GetAntOff1);
+    if (was) {
+        clear_pending();
+    }
+    if (s_antenna_boot_pending && s_antenna_boot_phase == 1 && was) {
+        send_request("GETANTOFF2", "1", Pending::GetAntOff2);
+        s_antenna_boot_phase = 2;
+    }
+    return true;
+}
+
+static bool parse_ack_getantoff2(const char *line)
+{
+    if (!strstr(line, ":ACK_GETANTOFF2:")) {
+        return false;
+    }
+    const float v = parse_ack_antoff_value_after_tag(line, ":ACK_GETANTOFF2:");
+    if (v == v) {
+        pwm_config_set_antoff_deg(2, normalize_deg_0_360(v));
+    }
+    const bool was = (s_pending == Pending::GetAntOff2);
+    if (was) {
+        clear_pending();
+    }
+    if (s_antenna_boot_pending && s_antenna_boot_phase == 2 && was) {
+        send_request("GETANTOFF3", "1", Pending::GetAntOff3);
+        s_antenna_boot_phase = 3;
+    }
+    return true;
+}
+
+static bool parse_ack_getantoff3(const char *line)
+{
+    if (!strstr(line, ":ACK_GETANTOFF3:")) {
+        return false;
+    }
+    const float v = parse_ack_antoff_value_after_tag(line, ":ACK_GETANTOFF3:");
+    if (v == v) {
+        pwm_config_set_antoff_deg(3, normalize_deg_0_360(v));
+    }
+    const bool was = (s_pending == Pending::GetAntOff3);
+    if (was) {
+        clear_pending();
+    }
+    if (s_antenna_boot_pending && s_antenna_boot_phase == 3 && was) {
+        pwm_config_save();
+        s_antenna_boot_pending = false;
+        s_antenna_boot_phase = 0;
+        rotor_app_antenna_offset_changed();
     }
     return true;
 }
@@ -620,6 +885,28 @@ static bool parse_ack_getposdg(const char *line)
     return true;
 }
 
+/** GETERR → ACK_ERR: Code oder 0 (Info/RotorController_RS485.html) */
+static bool parse_ack_err(const char *line)
+{
+    const char *p = strstr(line, ":ACK_ERR:");
+    if (!p) {
+        return false;
+    }
+    p += strlen(":ACK_ERR:");
+    char valbuf[16];
+    size_t i = 0;
+    while (*p && *p != ':' && i + 1 < sizeof(valbuf)) {
+        valbuf[i++] = (*p == ',') ? '.' : *p;
+        p++;
+    }
+    valbuf[i] = '\0';
+    rotor_error_app_set_error_code(atoi(valbuf));
+    if (s_pending == Pending::GetErr) {
+        clear_pending();
+    }
+    return true;
+}
+
 /** NAK: ausstehende Anfrage abbrechen */
 static bool parse_nak_and_clear(const char *line)
 {
@@ -657,16 +944,58 @@ static bool parse_nak_and_clear(const char *line)
         clear_pending();
         return true;
     }
+    if (strstr(line, ":NAK_SETPWM:") && s_pending == Pending::SetPwm) {
+        clear_pending();
+        return true;
+    }
+    if (strstr(line, ":NAK_GETANTOFF1:") && s_pending == Pending::GetAntOff1) {
+        clear_pending();
+        abort_antenna_boot();
+        return true;
+    }
+    if (strstr(line, ":NAK_GETANTOFF2:") && s_pending == Pending::GetAntOff2) {
+        clear_pending();
+        abort_antenna_boot();
+        return true;
+    }
+    if (strstr(line, ":NAK_GETANTOFF3:") && s_pending == Pending::GetAntOff3) {
+        clear_pending();
+        abort_antenna_boot();
+        return true;
+    }
+    if (strstr(line, ":NAK_GETERR:") && s_pending == Pending::GetErr) {
+        clear_pending();
+        return true;
+    }
     return false;
 }
 
-/** ERR vom Slave — Pending lösen, Boot abbrechen wenn nötig */
+/** Async ERR (nicht ACK_ERR) — Fehlercode + Pending lösen, Boot abbrechen wenn nötig */
 static bool parse_slave_err(const char *line)
 {
-    if (!strstr(line, ":ERR:")) {
+    const char *p = strstr(line, ":ERR:");
+    if (!p) {
         return false;
     }
-    if (s_pending == Pending::GetPosDg || s_pending == Pending::SetPosDg || s_pending == Pending::Stop) {
+    p += 5;
+    char valbuf[16];
+    size_t i = 0;
+    while (*p && *p != ':' && i + 1 < sizeof(valbuf)) {
+        valbuf[i++] = (*p == ',') ? '.' : *p;
+        p++;
+    }
+    valbuf[i] = '\0';
+    if (i > 0U) {
+        rotor_error_app_set_error_code(atoi(valbuf));
+    }
+    if (s_pending == Pending::GetAntOff1 || s_pending == Pending::GetAntOff2 ||
+        s_pending == Pending::GetAntOff3) {
+        clear_pending();
+        abort_antenna_boot();
+        return true;
+    }
+    if (s_pending == Pending::GetPosDg || s_pending == Pending::SetPosDg || s_pending == Pending::Stop ||
+        s_pending == Pending::SetPwm) {
         clear_pending();
         s_align_target_after_pos_read = false;
         if (s_boot_phase == 2) {
@@ -692,6 +1021,17 @@ static void process_complete_line(const char *line, size_t len)
         return;
     }
 
+    /* Broadcast: SETASELECT von anderem Master — lokale Antennenwahl + NVS (kein ACK) */
+    if (dst == ROTOR_RS485_BROADCAST_ID) {
+        if (src != (unsigned)s_master_id && strstr(line, ":SETASELECT:")) {
+            unsigned v = 0;
+            if (parse_setaselect_antenna_1_to_3(line, &v)) {
+                rotor_app_apply_remote_antenna_selection((uint8_t)v);
+            }
+        }
+        return;
+    }
+
     if (src == (unsigned)s_slave_id) {
         if (parse_slave_err(line)) {
             return;
@@ -710,6 +1050,21 @@ static void process_complete_line(const char *line, size_t len)
             return;
         }
         if (parse_ack_stop(line)) {
+            return;
+        }
+        if (parse_ack_setpwm(line)) {
+            return;
+        }
+        if (parse_ack_getantoff1(line)) {
+            return;
+        }
+        if (parse_ack_getantoff2(line)) {
+            return;
+        }
+        if (parse_ack_getantoff3(line)) {
+            return;
+        }
+        if (parse_ack_err(line)) {
             return;
         }
         if (parse_ack_getref(line)) {
@@ -757,7 +1112,10 @@ void rotor_rs485_init(void)
     s_boot_done = false;
     s_boot_phase = 0;
     s_next_periodic_getref_ms = millis() + ROTOR_PERIODIC_GETREF_MS;
+    s_next_geterr_ms = millis() + ROTOR_POLL_GETERR_MS;
     s_hw_snap_retarget_active = false;
+    s_antenna_boot_pending = true;
+    s_antenna_boot_phase = 0;
 }
 
 static void try_boot_getref()
@@ -773,6 +1131,19 @@ static void try_boot_getref()
     }
     send_request("GETREF", "0", Pending::GetRef);
     s_boot_phase = 1;
+}
+
+/** Erstes GETANTOFF1 nach Boot (Kette ACK → GET2 → GET3 in den Parsern). */
+static void try_antenna_boot_first_get(void)
+{
+    if (!s_boot_done || !s_antenna_boot_pending || s_antenna_boot_phase != 0) {
+        return;
+    }
+    if (s_poll_pos || s_poll_ref) {
+        return;
+    }
+    send_request("GETANTOFF1", "1", Pending::GetAntOff1);
+    s_antenna_boot_phase = 1;
 }
 
 void rotor_rs485_loop(void)
@@ -796,6 +1167,12 @@ void rotor_rs485_loop(void)
         return;
     }
 
+    try_antenna_boot_first_get();
+
+    if (s_pending != Pending::None) {
+        return;
+    }
+
     if (s_poll_pos) {
         if ((int32_t)(millis() - s_next_pos_poll_ms) >= 0) {
             send_request("GETPOSDG", "0", Pending::GetPosDg);
@@ -813,5 +1190,11 @@ void rotor_rs485_loop(void)
     if (s_boot_done && (int32_t)(millis() - s_next_periodic_getref_ms) >= 0) {
         send_request("GETREF", "0", Pending::GetRef);
         s_next_periodic_getref_ms = millis() + ROTOR_PERIODIC_GETREF_MS;
+        return;
+    }
+
+    if (s_boot_done && (int32_t)(millis() - s_next_geterr_ms) >= 0) {
+        send_request("GETERR", "0", Pending::GetErr);
+        s_next_geterr_ms = millis() + ROTOR_POLL_GETERR_MS;
     }
 }

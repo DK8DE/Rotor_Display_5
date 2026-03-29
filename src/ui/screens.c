@@ -13,7 +13,7 @@
 objects_t objects;
 
 static const char *screen_names[] = { "Main" };
-static const char *object_names[] = { "main", "kompass_bg", "grad_acc", "hauptanzeige", "position", "label_gradzeichen_a", "label_gradzeichen_t", "actual_dg", "taget_dg", "label_actual", "meldetext", "label_target", "homing_led", "fast_menue", "speed_anzeige", "label_actual_1", "speed_slider", "ref", "ref_label", "fast_menue_1", "antenna_1", "antenna_1_label", "antenna_2", "antenna_2_label", "antenna_3", "antenna_3_label", "temperaturen_wind", "label_wind_speed", "pfeil_wind", "label_aussen_temp", "engine_temperature", "wind_speed" };
+static const char *object_names[] = { "main", "kompass_bg", "grad_acc", "hauptanzeige", "position", "label_gradzeichen_a", "label_gradzeichen_t", "actual_dg", "taget_dg", "label_actual", "meldetext", "label_target", "homing_led", "fast_menue", "slow", "label__slow", "fast", "label_fast", "ref", "ref_label", "fast_menue_1", "antenna_1", "antenna_1_label", "antenna_2", "antenna_2_label", "antenna_3", "antenna_3_label", "temperaturen_wind", "label_wind_speed", "pfeil_wind", "label_aussen_temp", "engine_temperature", "wind_speed" };
 
 //
 // Event handlers
@@ -50,7 +50,7 @@ void create_screen_main() {
             objects.grad_acc = obj;
             lv_obj_set_pos(obj, 14, 15);
             lv_obj_set_size(obj, 438, 437);
-            lv_arc_set_range(obj, 0, 360); /* 1° pro Einheit; Feinjustierung Soll per Encoder 0,1° */
+            lv_arc_set_range(obj, 0, 360);
             lv_arc_set_value(obj, 0);
             lv_arc_set_bg_start_angle(obj, 0);
             lv_arc_set_bg_end_angle(obj, 360);
@@ -85,7 +85,7 @@ void create_screen_main() {
                             // Label Gradzeichen A
                             lv_obj_t *obj = lv_label_create(parent_obj);
                             objects.label_gradzeichen_a = obj;
-                            lv_obj_set_pos(obj, 201, 175);
+                            lv_obj_set_pos(obj, 207, 177);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_label_set_text(obj, "°");
@@ -103,7 +103,7 @@ void create_screen_main() {
                             // Actual DG
                             lv_obj_t *obj = lv_textarea_create(parent_obj);
                             objects.actual_dg = obj;
-                            lv_obj_set_pos(obj, 48, 175);
+                            lv_obj_set_pos(obj, 54, 177);
                             lv_obj_set_size(obj, 150, 43);
                             lv_textarea_set_accepted_chars(obj, "1234567890,.");
                             lv_textarea_set_max_length(obj, 6);
@@ -117,7 +117,7 @@ void create_screen_main() {
                             // Taget_DG
                             lv_obj_t *obj = lv_textarea_create(parent_obj);
                             objects.taget_dg = obj;
-                            lv_obj_set_pos(obj, 48, 41);
+                            lv_obj_set_pos(obj, 48, 45);
                             lv_obj_set_size(obj, 151, 43);
                             lv_textarea_set_accepted_chars(obj, "1234567890,.");
                             lv_textarea_set_max_length(obj, 6);
@@ -136,7 +136,7 @@ void create_screen_main() {
                             // Label Actual
                             lv_obj_t *obj = lv_label_create(parent_obj);
                             objects.label_actual = obj;
-                            lv_obj_set_pos(obj, 19, 183);
+                            lv_obj_set_pos(obj, 19, 188);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_label_set_text(obj, "A");
@@ -145,8 +145,8 @@ void create_screen_main() {
                             // Meldetext
                             lv_obj_t *obj = lv_textarea_create(parent_obj);
                             objects.meldetext = obj;
-                            lv_obj_set_pos(obj, -5, 112);
-                            lv_obj_set_size(obj, 257, 35);
+                            lv_obj_set_pos(obj, -8, 110);
+                            lv_obj_set_size(obj, 272, 35);
                             lv_textarea_set_max_length(obj, 255);
                             lv_textarea_set_text(obj, "Meldungen");
                             lv_textarea_set_placeholder_text(obj, "360");
@@ -175,7 +175,7 @@ void create_screen_main() {
                             // Homing Led
                             lv_obj_t *obj = lv_led_create(parent_obj);
                             objects.homing_led = obj;
-                            lv_obj_set_pos(obj, 111, 3);
+                            lv_obj_set_pos(obj, 117, 3);
                             lv_obj_set_size(obj, 24, 23);
                             lv_led_set_color(obj, lv_color_hex(0xff43b302));
                             lv_led_set_brightness(obj, 255);
@@ -194,42 +194,51 @@ void create_screen_main() {
                     {
                         lv_obj_t *parent_obj = obj;
                         {
-                            // Speed_Anzeige
-                            lv_obj_t *obj = lv_textarea_create(parent_obj);
-                            objects.speed_anzeige = obj;
-                            lv_obj_set_pos(obj, 44, 50);
-                            lv_obj_set_size(obj, 150, 35);
-                            lv_textarea_set_accepted_chars(obj, "1234567890");
-                            lv_textarea_set_max_length(obj, 3);
-                            lv_textarea_set_text(obj, "100");
-                            lv_textarea_set_placeholder_text(obj, "100");
-                            lv_textarea_set_one_line(obj, true);
-                            lv_textarea_set_password_mode(obj, false);
-                            add_style_grosse_zahlen(obj);
-                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            // Slow
+                            lv_obj_t *obj = lv_btn_create(parent_obj);
+                            objects.slow = obj;
+                            lv_obj_set_pos(obj, 51, 24);
+                            lv_obj_set_size(obj, 158, 44);
+                            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff2196f3), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            {
+                                lv_obj_t *parent_obj = obj;
+                                {
+                                    // LABEL  Slow
+                                    lv_obj_t *obj = lv_label_create(parent_obj);
+                                    objects.label__slow = obj;
+                                    lv_obj_set_pos(obj, 0, 0);
+                                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_label_set_text(obj, "Slow");
+                                }
+                            }
                         }
                         {
-                            // Label Actual_1
-                            lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.label_actual_1 = obj;
-                            lv_obj_set_pos(obj, 202, 54);
-                            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_label_set_text(obj, "%");
-                        }
-                        {
-                            // Speed_Slider
-                            lv_obj_t *obj = lv_slider_create(parent_obj);
-                            objects.speed_slider = obj;
-                            lv_obj_set_pos(obj, 0, 117);
-                            lv_obj_set_size(obj, 248, 10);
-                            lv_slider_set_value(obj, 100, LV_ANIM_OFF);
+                            // Fast
+                            lv_obj_t *obj = lv_btn_create(parent_obj);
+                            objects.fast = obj;
+                            lv_obj_set_pos(obj, 50, 105);
+                            lv_obj_set_size(obj, 158, 44);
+                            {
+                                lv_obj_t *parent_obj = obj;
+                                {
+                                    // LABEL Fast
+                                    lv_obj_t *obj = lv_label_create(parent_obj);
+                                    objects.label_fast = obj;
+                                    lv_obj_set_pos(obj, 0, 0);
+                                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                                    lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_label_set_text(obj, "Fast");
+                                }
+                            }
                         }
                         {
                             // REF
                             lv_obj_t *obj = lv_btn_create(parent_obj);
                             objects.ref = obj;
-                            lv_obj_set_pos(obj, 44, 180);
+                            lv_obj_set_pos(obj, 50, 184);
                             lv_obj_set_size(obj, 158, 44);
                             {
                                 lv_obj_t *parent_obj = obj;
@@ -237,7 +246,7 @@ void create_screen_main() {
                                     // REF LABEL
                                     lv_obj_t *obj = lv_label_create(parent_obj);
                                     objects.ref_label = obj;
-                                    lv_obj_set_pos(obj, 0, -1);
+                                    lv_obj_set_pos(obj, 0, 0);
                                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -262,7 +271,7 @@ void create_screen_main() {
                             // Antenna 1
                             lv_obj_t *obj = lv_btn_create(parent_obj);
                             objects.antenna_1 = obj;
-                            lv_obj_set_pos(obj, 28, 23);
+                            lv_obj_set_pos(obj, 37, 28);
                             lv_obj_set_size(obj, 185, 44);
                             lv_obj_set_style_bg_color(obj, lv_color_hex(0xff2196f3), LV_PART_MAIN | LV_STATE_DEFAULT);
                             {
@@ -271,7 +280,7 @@ void create_screen_main() {
                                     // Antenna 1 label
                                     lv_obj_t *obj = lv_label_create(parent_obj);
                                     objects.antenna_1_label = obj;
-                                    lv_obj_set_pos(obj, 0, 0);
+                                    lv_obj_set_pos(obj, 1, -1);
                                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -283,7 +292,7 @@ void create_screen_main() {
                             // Antenna 2
                             lv_obj_t *obj = lv_btn_create(parent_obj);
                             objects.antenna_2 = obj;
-                            lv_obj_set_pos(obj, 28, 100);
+                            lv_obj_set_pos(obj, 37, 106);
                             lv_obj_set_size(obj, 185, 44);
                             {
                                 lv_obj_t *parent_obj = obj;
@@ -291,7 +300,7 @@ void create_screen_main() {
                                     // Antenna 2 label
                                     lv_obj_t *obj = lv_label_create(parent_obj);
                                     objects.antenna_2_label = obj;
-                                    lv_obj_set_pos(obj, 0, 1);
+                                    lv_obj_set_pos(obj, 5, 0);
                                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -303,7 +312,7 @@ void create_screen_main() {
                             // Antenna 3
                             lv_obj_t *obj = lv_btn_create(parent_obj);
                             objects.antenna_3 = obj;
-                            lv_obj_set_pos(obj, 28, 174);
+                            lv_obj_set_pos(obj, 37, 180);
                             lv_obj_set_size(obj, 185, 44);
                             {
                                 lv_obj_t *parent_obj = obj;
@@ -336,7 +345,7 @@ void create_screen_main() {
                             // Label Wind Speed
                             lv_obj_t *obj = lv_label_create(parent_obj);
                             objects.label_wind_speed = obj;
-                            lv_obj_set_pos(obj, 151, 30);
+                            lv_obj_set_pos(obj, 151, 24);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_label_set_text(obj, "kmh");
@@ -345,7 +354,7 @@ void create_screen_main() {
                             // pfeilWind
                             lv_obj_t *obj = lv_img_create(parent_obj);
                             objects.pfeil_wind = obj;
-                            lv_obj_set_pos(obj, 91, 77);
+                            lv_obj_set_pos(obj, 97, 77);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_img_set_src(obj, "S:/img/ui_image_pfeil_wind.bin");
                             lv_img_set_size_mode(obj, LV_IMG_SIZE_MODE_REAL);
@@ -355,7 +364,7 @@ void create_screen_main() {
                             // Label aussen temp
                             lv_obj_t *obj = lv_label_create(parent_obj);
                             objects.label_aussen_temp = obj;
-                            lv_obj_set_pos(obj, 152, 215);
+                            lv_obj_set_pos(obj, 151, 215);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_label_set_text(obj, "°C");
@@ -364,7 +373,7 @@ void create_screen_main() {
                             // Engine Temperature
                             lv_obj_t *obj = lv_textarea_create(parent_obj);
                             objects.engine_temperature = obj;
-                            lv_obj_set_pos(obj, 71, 211);
+                            lv_obj_set_pos(obj, 71, 213);
                             lv_obj_set_size(obj, 69, 37);
                             lv_textarea_set_max_length(obj, 128);
                             lv_textarea_set_text(obj, "25.1");
@@ -378,7 +387,7 @@ void create_screen_main() {
                             // WindSpeed
                             lv_obj_t *obj = lv_textarea_create(parent_obj);
                             objects.wind_speed = obj;
-                            lv_obj_set_pos(obj, 43, 26);
+                            lv_obj_set_pos(obj, 43, 20);
                             lv_obj_set_size(obj, 97, 37);
                             lv_textarea_set_max_length(obj, 5);
                             lv_textarea_set_text(obj, "33.4");

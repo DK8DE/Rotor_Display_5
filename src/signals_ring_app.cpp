@@ -8,6 +8,7 @@
 #include <Arduino.h>
 #include <math.h>
 
+#include "rotor_error_app.h"
 #include "rotor_rs485.h"
 #include <Signals.h>
 
@@ -95,6 +96,14 @@ void signals_ring_app_loop(uint32_t now_ms)
         return;
     }
     s_last_draw_ms = now_ms;
+
+    if (rotor_error_app_is_fault_ring_red()) {
+        for (uint8_t i = 0; i < s_n; i++) {
+            s_sig->setPixel(i, 255, 0, 0, 100);
+        }
+        s_sig->show();
+        return;
+    }
 
     const bool ref = rotor_rs485_is_referenced();
     const bool homing = rotor_rs485_is_homing();

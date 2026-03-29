@@ -30,9 +30,10 @@ typedef struct _objects_t {
     lv_obj_t *label_target;
     lv_obj_t *homing_led;
     lv_obj_t *fast_menue;
-    lv_obj_t *speed_anzeige;
-    lv_obj_t *label_actual_1;
-    lv_obj_t *speed_slider;
+    lv_obj_t *slow;
+    lv_obj_t *label__slow;
+    lv_obj_t *fast;
+    lv_obj_t *label_fast;
     lv_obj_t *ref;
     lv_obj_t *ref_label;
     lv_obj_t *fast_menue_1;
