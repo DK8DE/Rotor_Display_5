@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include <FFat.h>
 #include <esp_display_panel.hpp>
@@ -95,7 +94,7 @@ using namespace esp_panel::board;
  * Schritte kommen per UltraEncoderStepCallback direkt aus dem PCNT-Service-Task — kein 1-ms-Polling,
  * sonst können feine Schritte mit dem internen Flush (Watch/Timeout) kollidieren.
  */
-static constexpr int ENCODER_DELTA_TENTHS_PER_STEP = 1;
+static constexpr int ENCODER_DELTA_TENTHS_PER_STEP = 10;
 
 /**
  * PCNT-Hardware-Glitchfilter (Nanosekunden): Pulse kürzer als dieser Wert zählen nicht.

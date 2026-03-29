@@ -9,6 +9,7 @@
 #undef ESP_UTILS_LOG_TAG
 #define ESP_UTILS_LOG_TAG "LvPort"
 #include "esp_lib_utils.h"
+#include "esp_display_panel.hpp"
 #include "lvgl_v8_port.h"
 
 using namespace esp_panel::drivers;

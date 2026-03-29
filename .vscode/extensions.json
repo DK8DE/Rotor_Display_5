@@ -1,5 +1,6 @@
 {
     "recommendations": [
+        "llvm-vs-code-extensions.vscode-clangd",
         "pioarduino.pioarduino-ide"
     ],
     "unwantedRecommendations": [

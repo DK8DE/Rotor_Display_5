@@ -9,8 +9,14 @@
 #ifdef CONFIG_ARDUINO_RUNNING_CORE
 #include <Arduino.h>
 #endif
-#include "esp_display_panel.hpp"
 #include "lvgl.h"
+
+#ifdef __cplusplus
+namespace esp_panel::drivers {
+class LCD;
+class Touch;
+}
+#endif
 
 // *INDENT-OFF*
 

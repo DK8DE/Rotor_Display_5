@@ -1,0 +1,12 @@
+{
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "C_Cpp.errorSquiggles": "disabled",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=${env:USERPROFILE}/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-gcc*",
+    "--query-driver=${env:USERPROFILE}/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-g++*",
+    "--query-driver=**/xtensa-esp32s3-elf-gcc*",
+    "--query-driver=**/xtensa-esp32s3-elf-g++*"
+  ],
+  "clangd.fallbackFlags": []
+}

@@ -1,0 +1,4 @@
+# ESP32/Arduino: viele Header sind „Umbrella“-Includes; clangd markiert sie oft fälschlich.
+# compile_commands.json: pio run -t compiledb -e esp32-s3-viewe
+Diagnostics:
+  UnusedIncludes: None

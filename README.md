@@ -2,15 +2,26 @@
 
 Build und Voraussetzungen für die Firmware (ESP32-S3, VIEWE UEDX46460015, Umgebung `esp32-s3-viewe`).
 
-## Ziel
+## Rotorcontroller und Zusammenspiel mit dem PC
+
+Der **Rotorcontroller** (Antennenrotor-Steuerung) steuert einen **Azimut-Rotor** und kann **alleine** am Gerät oder **gemeinsam mit einer PC-Software** betrieben werden. Die Firmware auf diesem Display ist die **Bedienoberfläche** auf dem ESP32; der eigentliche Regler/Motor hängt typischerweise per **RS485** am Bus.
+
+Für die **Windows-Software am PC** ist der Controller (über dieses Board) im Wesentlichen die **USB-zu-RS485-Brücke**: Befehle und Telemetrie laufen zwischen PC und Rotor-Bus. Die Desktop-Anwendung dazu ist **RotorTcpBridge** (Python/Qt):
+
+**https://github.com/DK8DE/RotorTcpBridge**
+
+Dort sind Verbindung (seriell/TCP), Protokoll, Kompass, Karte und Schnittstellen zu anderer Software beschrieben.
+
+## Ziel dieses Repos
 
 Firmware für ESP32-S3 bauen und flashen. Bilder für LVGL liegen auf der FAT-Partition (über `uploadfs`); Quellen sind PNGs im Ordner `imgs/`.
 
 ## EEZ Studio und Bildnamen (`imgs` vs. `src/ui`)
 
-- EEZ Studio kann beim Export oder Build LVGL-Bilder als `*.bin` unter **`src/ui`** ablegen. Dieses Projekt lädt die Bilder zur Laufzeit von der FAT-Partition **`S:/img/...`** (die passenden `*.bin` liegen nach Konvertierung unter **`data/img/`**).
-- Die **PNG-Dateien in `imgs/`** müssen **denselben Basisnamen** tragen wie die Originalbilder bzw. die Asset-Namen in EEZ (z. B. `ui_image_kompass_bg.png`, `ui_image_pfeil_wind.png`), damit `tools/png_to_lvgl8_bin.py` die passenden Dateien **`data/img/<name>.bin`** erzeugt und sie zu den Referenzen in `screens.c` / `images.c` passen.
-- **`build.ps1`** löscht **vor jedem Lauf** alle `*.bin` unter **`src/ui`** (rekursiv), falls welche vorhanden sind, damit keine veralteten EEZ-Binärdateien im UI-Ordner liegen bleiben.
+- EEZ Studio kann beim Export oder Build LVGL-Bilder als **`*.bin`** unter **`src/ui`** ablegen. **Diese von EEZ erzeugten `.bin`-Dateien haben für dieses Projekt kein passendes Format** (andere LVGL-/Speicher-Erwartung als unsere FAT-Ladepfade). Sie werden daher **entfernt** und **nicht** verwendet.
+- Stattdessen erzeugen wir die benötigten **`*.bin`** **selbst aus PNGs** mit **`tools/png_to_lvgl8_bin.py`** — passend zu LVGL 8 und dem Zugriff zur Laufzeit über **`S:/img/...`** auf der FAT-Partition (die fertigen Dateien liegen unter **`data/img/<name>.bin`** nach der Konvertierung).
+- Die **PNG-Dateien in `imgs/`** müssen **denselben Basisnamen** tragen wie die Originalbilder bzw. die Asset-Namen in EEZ (z. B. `ui_image_kompass_bg.png`, `ui_image_pfeil_wind.png`), damit das Skript die richtigen **`data/img/<name>.bin`** erzeugt und sie zu den Referenzen in `screens.c` / `images.c` passen.
+- **`build.ps1`** löscht **vor jedem Lauf** alle **`*.bin`** unter **`src/ui`** (rekursiv), falls welche vorhanden sind — damit liegen keine veralteten oder **von EEZ exportierten, ungeeigneten** Binärdateien im UI-Ordner.
 
 ## Anwendungscode und `src/ui` (nicht manuell bearbeiten)
 
@@ -31,6 +42,20 @@ Firmware für ESP32-S3 bauen und flashen. Bilder für LVGL liegen auf der FAT-Pa
    - Upload/Monitor: siehe `platformio.ini` (z. B. Upload 921600, Monitor 115200).
    - Bei ESP32-S3 + USB-CDC: `monitor_rts` / `monitor_dtr` = 0 in `platformio.ini`, sonst Reset beim Öffnen des seriellen Monitors.
 4. **Lokale Bibliotheken** unter `lib/` (LVGL, ESP32_Display_Panel, eez-framework, …). Kein separates Arduino-`libraries`-Setup nötig, wenn `lib/` vollständig ist.
+
+## Cursor / VS Code: C++-Analyse (clangd)
+
+Ohne passende **Kompilierdaten** markiert der Editor oft **Scheinfehler** (z. B. bei `assert(board->begin())`, fehlende Includes), weil die Analyse nicht dieselben Flags und Pfade wie der echte ESP32-Xtensa-Build nutzt.
+
+1. **Einmal (oder nach größeren `platformio.ini`-Änderungen)** im Projektroot die **Compilation Database** erzeugen (steht in `.gitignore`, wird **nicht** ins Repo committet):
+   ```bash
+   pio run -t compiledb -e esp32-s3-viewe
+   ```
+   Danach liegt `compile_commands.json` im **Projektroot** (gleicher Ordner wie `platformio.ini`).
+2. **Erweiterung:** **clangd** (`llvm-vs-code-extensions.vscode-clangd`). Die Projektdatei **`.vscode/settings.json`** schaltet die Microsoft-**C/C++**-IntelliSense-Squiggles ab und setzt **`--query-driver`** für die PlatformIO-Toolchain unter `%USERPROFILE%\.platformio\packages\toolchain-xtensa-esp32s3\...`, damit clangd die **Xtensa-GCC**-Aufrufe aus `compile_commands.json` nachvollziehen darf.
+3. Fenster neu laden (**Developer: Reload Window**), bis die Analyse die neue DB einliest.
+
+Liegt die Toolchain woanders, die Pfade in `.vscode/settings.json` bei `clangd.arguments` → `--query-driver` anpassen.
 
 ## Empfohlen: `build.ps1` (Windows PowerShell)
 
