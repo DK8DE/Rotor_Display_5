@@ -6,12 +6,15 @@
 #include <stdint.h>
 #include "lvgl_v8_port.h"
 
-#include <ESP_Knob.h>
 #include <Button.h>
+#include "UltraEncoderPCNT.h"
 #include <Signals.h>
 // WICHTIG: Lokalen UI-Wrapper verwenden (EEZ-Studio UI liegt unter "src/ui/")
 #include "ui.h"
 #include "serial_bridge.h"
+#include "rotor_app.h"
+#include "rotor_rs485.h"
+#include "signals_ring_app.h"
 
 /** Signals → ATtiny: nur TX, wie im SignalsDemo (Serial1). */
 static constexpr int8_t SIGNALS_TX_PIN = 40;
@@ -77,43 +80,58 @@ static void ui_tick_timer_cb(lv_timer_t *timer)
 
 
 
-/**
-/* To use the built-in examples and demos of LVGL uncomment the includes below respectively.
- * You also need to copy `lvgl/examples` to `lvgl/src/examples`. Similarly for the demos `lvgl/demos` to `lvgl/src/demos`.
- */
-// #include <demos/lv_demos.h>
-// #include <examples/lv_examples.h>
-
 using namespace esp_panel::drivers;
 using namespace esp_panel::board;
 
 /*if you use BOARD_VIEWE_UEDX46460015_MD50ET or UEDX48480021_MD80E/T,please open it*/
-#define GPIO_NUM_KNOB_PIN_A     6
-#define GPIO_NUM_KNOB_PIN_B     5
+/* A/B vertauscht ggü. Board-Silk — Drehrichtung wie gewünscht (Quadratur) */
+#define GPIO_NUM_KNOB_PIN_A     5
+#define GPIO_NUM_KNOB_PIN_B     6
 #define GPIO_BUTTON_PIN         GPIO_NUM_0
 
-/*Knob event definition*/
-ESP_Knob *knob;
-void onKnobLeftEventCallback(int count, void *usr_data)
+/**
+ * Skalierung PCNT-Schritt → Zehntelgrad für rotor_app_encoder_step(delta_tenths).
+ * 10 = 1,0° pro Rastung; 1 = 0,1° pro Rastung (Fein).
+ * Schritte kommen per UltraEncoderStepCallback direkt aus dem PCNT-Service-Task — kein 1-ms-Polling,
+ * sonst können feine Schritte mit dem internen Flush (Watch/Timeout) kollidieren.
+ */
+static constexpr int ENCODER_DELTA_TENTHS_PER_STEP = 1;
+
+/**
+ * PCNT-Hardware-Glitchfilter (Nanosekunden): Pulse kürzer als dieser Wert zählen nicht.
+ * Vorher 200 ns ≈ aus; mechanische Drehgeber profitieren oft von 2–10 µs.
+ * Zu groß: sehr schnelles Drehen kann Schritte „verschlucken“. 0 = Filter aus.
+ */
+static constexpr uint32_t ENCODER_GLITCH_NS = 5000u;
+
+/** Quadratur-Encoder über PCNT (UltraEncoderPCNT). */
+static UltraEncoderPCNT *s_ultra_enc = nullptr;
+
+static void ultra_encoder_on_step(void *user, int32_t step_delta)
 {
-    // Serial.printf("Detect left event, count is %d\n", count);
-    lvgl_port_lock(-1);
-    LVGL_knob_event((void*)(intptr_t)KNOB_LEFT);
-    lvgl_port_unlock();
+    (void)user;
+    if (step_delta == 0 || ENCODER_DELTA_TENTHS_PER_STEP == 0) {
+        return;
+    }
+    rotor_app_encoder_step(static_cast<int>(step_delta) * ENCODER_DELTA_TENTHS_PER_STEP);
 }
 
-void onKnobRightEventCallback(int count, void *usr_data)
+static void SingleClickCb(void *button_handle, void *usr_data)
 {
-    // Serial.printf("Detect right event, count is %d\n", count);
+    (void)button_handle;
+    (void)usr_data;
+    if (rotor_rs485_is_position_polling()) {
+        /* Soll = Ist: Encoder-Session löschen (sonst kein taget + altes SETPOS aus rotor_app_loop) */
+        const float snap = rotor_rs485_get_last_position_deg();
+        rotor_app_snap_target_to_deg(snap);
+        rotor_rs485_hw_snap_retarget_request(snap);
+    } else if (rotor_rs485_is_moving()) {
+        rotor_rs485_send_stop();
+    } else if (!rotor_rs485_is_referenced()) {
+        rotor_rs485_send_setref_homing();
+    }
     lvgl_port_lock(-1);
-    LVGL_knob_event((void*)(intptr_t)KNOB_RIGHT);
-    lvgl_port_unlock();
-}
-
-static void SingleClickCb(void *button_handle, void *usr_data) {
-    // Serial.println("Button Single Click");
-    lvgl_port_lock(-1);
-    LVGL_button_event((void*)(intptr_t)BUTTON_SINGLE_CLICK);
+    LVGL_button_event((void *)(intptr_t)BUTTON_SINGLE_CLICK);
     lvgl_port_unlock();
 }
 static void DoubleClickCb(void *button_handle, void *usr_data)
@@ -168,12 +186,20 @@ void setup()
     Serial.println("Initializing LVGL");
     lvgl_port_init(board->getLCD(), board->getTouch());
 
-    /*knob initialization*/
-    Serial.println("Initialize Knob device");
-    knob = new ESP_Knob(GPIO_NUM_KNOB_PIN_A, GPIO_NUM_KNOB_PIN_B);
-    knob->begin();
-    knob->attachLeftEventCallback(onKnobLeftEventCallback);
-    knob->attachRightEventCallback(onKnobRightEventCallback);
+    /* UltraEncoderPCNT: HALF = 2 Flanken pro logischem Schritt (VIEWE-Knob); FULL würde nur jeden 2. Klick zählen */
+    Serial.println("Initialize UltraEncoderPCNT (A/B GPIO5/6, ULTRA_MODE_HALF)");
+    s_ultra_enc = new UltraEncoderPCNT(
+        GPIO_NUM_KNOB_PIN_A,
+        GPIO_NUM_KNOB_PIN_B,
+        ULTRA_MODE_HALF,
+        0,
+        1000);
+    if (!s_ultra_enc->begin(0, 500.0f, 0, ENCODER_GLITCH_NS)) {
+        Serial.println("UltraEncoderPCNT begin failed");
+    } else {
+        s_ultra_enc->setPositionSteps(0);
+        s_ultra_enc->setStepCallback(ultra_encoder_on_step, nullptr);
+    }
 
     Serial.println("Initialize Button device");
     Button *btn = new Button(GPIO_BUTTON_PIN, false);
@@ -185,27 +211,13 @@ void setup()
     /* Lock the mutex due to the LVGL APIs are not thread-safe */
     lvgl_port_lock(-1);
 
-    /**
-     * Create the simple labels
-     */
 
-    /**
-     * Try an example. Don't forget to uncomment header.
-     * See all the examples online: https://docs.lvgl.io/master/examples.html
-     * source codes: https://github.com/lvgl/lvgl/tree/e7f88efa5853128bf871dde335c0ca8da9eb7731/examples
-     */
-    //  lv_example_btn_1();
-
-    /**
-     * Or try out a demo.
-     * Don't forget to uncomment header and enable the demos in `lv_conf.h`. E.g. `LV_USE_DEMO_WIDGETS`
-     */
-    // lv_demo_widgets();
-    // lv_demo_benchmark();
-    // lv_demo_music();
-    // lv_demo_stress();
     // EEZ-Studio UI initialisieren (Screens/Styles/Images werden angelegt)
     ui_init();
+
+    /* Rotor RS485: Homing-Button, LED, Boot-GETREF (Logik außerhalb src/ui) */
+    rotor_app_init();
+    signals_ring_app_init(&g_signals, SIGNALS_NUM_LEDS);
 
     /**
      * Sichtbarer Rand / Panel-Versatz: nicht per LVGL-Screen-Padding (unzuverlässig mit EEZ-Root
@@ -222,5 +234,12 @@ void setup()
 
 void loop()
 {
+    /* RS485-Empfang zuerst (USB spiegeln + Parser) — kann Pending löschen (ACK) */
     serial_bridge::poll();
+    /* Encoder-SETPOS-Retry sofort nach frei werdendem Bus, bevor wieder GETPOSDG gestartet wird */
+    rotor_app_loop();
+    rotor_rs485_loop();
+    signals_ring_app_loop(millis());
+
+    rotor_app_loop();
 }

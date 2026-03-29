@@ -12,6 +12,12 @@ Firmware für ESP32-S3 bauen und flashen. Bilder für LVGL liegen auf der FAT-Pa
 - Die **PNG-Dateien in `imgs/`** müssen **denselben Basisnamen** tragen wie die Originalbilder bzw. die Asset-Namen in EEZ (z. B. `ui_image_kompass_bg.png`, `ui_image_pfeil_wind.png`), damit `tools/png_to_lvgl8_bin.py` die passenden Dateien **`data/img/<name>.bin`** erzeugt und sie zu den Referenzen in `screens.c` / `images.c` passen.
 - **`build.ps1`** löscht **vor jedem Lauf** alle `*.bin` unter **`src/ui`** (rekursiv), falls welche vorhanden sind, damit keine veralteten EEZ-Binärdateien im UI-Ordner liegen bleiben.
 
+## Anwendungscode und `src/ui` (nicht manuell bearbeiten)
+
+- Der Ordner **`src/ui`** ist **von EEZ Studio generiert** und wird beim **neuen Export überschrieben**. Dort **keine eigenen Änderungen** vornehmen (keine Fixes, keine Zusatzlogik in `screens.c` usw.).
+- Eigene Logik gehört **außerhalb** von `src/ui`, z. B. in `src/main.cpp`, eigene Module unter `src/`, Hooks über die von EEZ vorgesehenen **Actions**, **`ui_tick`**, **`objects`**, **`ui.h`** und ähnliche **öffentliche Eintrittspunkte**.
+- So bleibt ein erneuter EEZ-Export möglich, ohne dass Anwendungscode verloren geht.
+
 ## Voraussetzungen (Rechner)
 
 1. **PlatformIO** (CLI oder VS Code/Cursor). Im Projektordner funktionieren die Befehle `pio run …`.
@@ -78,3 +84,4 @@ pio run -t clean
 - **Mit `-Fs` / `--fs`:** Bilder neu erzeugen, FS hochladen, Firmware flashen.
 - **Python + pip + Pillow** für die PNG-Pipeline; **PlatformIO** für den ESP-Build.
 - **PNGs in `imgs/`** an EEZ-Assetnamen anbinden; FAT-Dateien stammen aus `data/img/` nach `uploadfs`.
+- **`src/ui` nicht von Hand ändern**; nur die EEZ-API von außen nutzen (siehe Abschnitt oben).

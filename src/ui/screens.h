@@ -29,6 +29,12 @@ typedef struct _objects_t {
     lv_obj_t *meldetext;
     lv_obj_t *label_target;
     lv_obj_t *homing_led;
+    lv_obj_t *fast_menue;
+    lv_obj_t *speed_anzeige;
+    lv_obj_t *label_actual_1;
+    lv_obj_t *speed_slider;
+    lv_obj_t *ref;
+    lv_obj_t *ref_label;
     lv_obj_t *fast_menue_1;
     lv_obj_t *antenna_1;
     lv_obj_t *antenna_1_label;
@@ -36,11 +42,6 @@ typedef struct _objects_t {
     lv_obj_t *antenna_2_label;
     lv_obj_t *antenna_3;
     lv_obj_t *antenna_3_label;
-    lv_obj_t *fast_menue;
-    lv_obj_t *speed_anzeige;
-    lv_obj_t *label_actual_1;
-    lv_obj_t *speed_slider;
-    lv_obj_t *ref_label;
     lv_obj_t *temperaturen_wind;
     lv_obj_t *label_wind_speed;
     lv_obj_t *pfeil_wind;
