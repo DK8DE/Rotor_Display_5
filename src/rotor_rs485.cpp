@@ -1021,9 +1021,9 @@ static void process_complete_line(const char *line, size_t len)
         return;
     }
 
-    /* Broadcast: SETASELECT von anderem Master — lokale Antennenwahl + NVS (kein ACK) */
+    /* Broadcast SETASELECT: auch bei SRC = eigene Master-ID (USB-Loopback vom PC; kein Echo von hw_send). */
     if (dst == ROTOR_RS485_BROADCAST_ID) {
-        if (src != (unsigned)s_master_id && strstr(line, ":SETASELECT:")) {
+        if (strstr(line, ":SETASELECT:")) {
             unsigned v = 0;
             if (parse_setaselect_antenna_1_to_3(line, &v)) {
                 rotor_app_apply_remote_antenna_selection((uint8_t)v);

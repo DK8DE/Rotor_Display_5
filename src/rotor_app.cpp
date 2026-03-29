@@ -48,7 +48,7 @@ static bool s_pwm_boot_send_pending = true;
 
 static void pwm_style_slow_fast(bool fast_active)
 {
-    const lv_color_t c_on = lv_color_hex(0x64c562);
+    const lv_color_t c_on = lv_color_hex(0x087321);
     const lv_color_t c_off = lv_color_hex(0x2196f3);
     if (objects.slow) {
         lv_obj_set_style_bg_color(objects.slow, fast_active ? c_off : c_on, LV_PART_MAIN);
@@ -84,7 +84,7 @@ static void on_fast_btn(lv_event_t *e)
 
 static void antenna_apply_style(uint8_t active_1_to_3)
 {
-    const lv_color_t c_on = lv_color_hex(0x64c562);
+    const lv_color_t c_on = lv_color_hex(0x087321);
     const lv_color_t c_off = lv_color_hex(0x2196f3);
     lv_obj_t *btns[3] = { objects.antenna_1, objects.antenna_2, objects.antenna_3 };
     for (uint8_t i = 0; i < 3; i++) {
@@ -103,8 +103,10 @@ extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3)
     }
     pwm_config_set_last_antenna(n_1_to_3);
     pwm_config_save();
+    lvgl_port_lock(-1);
     antenna_apply_style(n_1_to_3);
     rotor_app_antenna_offset_changed();
+    lvgl_port_unlock();
 }
 
 static void on_antenna_btn(lv_event_t *e)
