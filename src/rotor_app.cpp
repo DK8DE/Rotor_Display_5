@@ -499,15 +499,19 @@ extern "C" void rotor_app_weather_ui_poll(void)
     const float t = rotor_rs485_get_last_tempa_c();
     lvgl_port_lock(-1);
     char buf[24];
-    /* EEZ: wind_speed / temperature sind lv_textarea (max. Wind 5 Zeichen), keine lv_label */
+    /* EEZ: wind_speed / temperature sind lv_textarea (Wind max. 5 Zeichen, z. B. „123,4“), keine lv_label */
     if (m & 1u) {
-        snprintf(buf, sizeof(buf), "%.0f", w);
+        float wd = w;
+        if (wd > 999.9f) {
+            wd = 999.9f;
+        }
+        fmt_de(buf, sizeof(buf), wd);
         if (objects.wind_speed) {
             lv_textarea_set_text(objects.wind_speed, buf);
         }
     }
     if (m & 2u) {
-        snprintf(buf, sizeof(buf), "%.1f", t);
+        fmt_de(buf, sizeof(buf), t);
         if (objects.temperature) {
             lv_textarea_set_text(objects.temperature, buf);
         }
