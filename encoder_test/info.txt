@@ -1,0 +1,4 @@
+cd encoder_test
+pio run
+pio run -t upload
+pio device monitor

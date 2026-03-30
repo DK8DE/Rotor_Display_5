@@ -52,6 +52,11 @@ typedef void (*UltraEncoderStepCallback)(void *user, int32_t stepDelta);
 // ms: Task wird spaetestens in diesem Intervall geweckt, um PCNT-Zaehler zu "flushen" (auch bei langsamem Drehen).
 #define UEPCNT_TASK_TIMEOUT_MS          1
 
+/** Default PCNT-Glitchfilter (ns). Mechanische Drehgeber: typ. 0,3–1 ms; 0 = aus. */
+#ifndef UEPCNT_DEFAULT_GLITCH_NS
+#define UEPCNT_DEFAULT_GLITCH_NS 600000u
+#endif
+
 // Encoder-Modus (logische Aufloesung)
 // ------------------------------------------------------------
 enum UltraEncoderMode {
@@ -79,7 +84,15 @@ public:
     bool begin(uint8_t accelPercent = 0,
                float accelThresholdStepsPerSec = 500.0f,
                uint8_t ticksPerStep = 0,
-               uint32_t glitchNs = 200);
+               uint32_t glitchNs = UEPCNT_DEFAULT_GLITCH_NS);
+
+    /**
+     * Gegenrichtungs-Filter (0 = aus): Nur fuer genau **einen** logischen Schritt (|delta|==1).
+     * Schneller Richtungswechsel innerhalb von minMs nach dem letzten Schritt wird verworfen
+     * (Rest-Ticks bleiben im PCNT-Rest; kein Positions-/Callback-Sprung).
+     * Mehrere Schritte gleicher Richtung oder |delta|>1: ungefiltert (echte schnelle Drehung).
+     */
+    void setOppositeStepMinMs(uint32_t minMs);
 
     // --------------------------------------------------------
     // Position / Speed
@@ -230,6 +243,11 @@ private:
 
     UltraEncoderStepCallback _onStepCb;
     void *_onStepUser;
+
+    /** 0 = Gegenrichtungsfilter aus; sonst ms zwischen Einzelschritt und erlaubter Gegenrichtung */
+    uint32_t _oppStepMinMs;
+    int8_t   _lastEmittedStepSign;
+    uint32_t _lastEmittedStepMs;
 
     // Zustaende
     int64_t  _positionSteps;       // RAW-Position (nur A/B)

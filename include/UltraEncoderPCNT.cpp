@@ -41,6 +41,9 @@ UltraEncoderPCNT::UltraEncoderPCNT(int pinA,
   _wpNeg(-UEPCNT_DEFAULT_WATCHPOINT_TICKS),
   _onStepCb(nullptr),
   _onStepUser(nullptr),
+  _oppStepMinMs(0),
+  _lastEmittedStepSign(0),
+  _lastEmittedStepMs(0),
   _positionSteps(0),
   _tickRemainder(0),
   _corrOffsetSteps(0),
@@ -148,6 +151,9 @@ bool UltraEncoderPCNT::begin(uint8_t accelPercent,
     // Zeitbasis
     _lastMicros = micros();
 
+    _lastEmittedStepSign = 0;
+    _lastEmittedStepMs = 0;
+
     _running = true;
 
     // Task starten: wartet auf Events oder Timeout (kein Busy-Wait!)
@@ -193,10 +199,17 @@ float UltraEncoderPCNT::getSpeedStepsPerSec() const {
 #endif
 }
 
+void UltraEncoderPCNT::setOppositeStepMinMs(uint32_t minMs)
+{
+    _oppStepMinMs = minMs;
+}
+
 void UltraEncoderPCNT::setPositionSteps(long newPosition) {
     // RAW setzen
     _positionSteps = (int64_t)newPosition;
     _tickRemainder = 0;
+    _lastEmittedStepSign = 0;
+    _lastEmittedStepMs = 0;
 
     // Korrektur zuruecksetzen (damit "newPosition" auch wirklich der neue Referenzwert ist)
     _corrOffsetSteps = 0;
@@ -611,23 +624,52 @@ static int32_t uepcnt_div_floor_ticks(int32_t a, int32_t b)
 void UltraEncoderPCNT::handleDticks(int32_t dticks, uint32_t dMicros) {
     int32_t totalTicks = _tickRemainder + dticks;
 
-    int32_t stepDelta = 0;
+    int32_t stepDeltaRaw = 0;
     int32_t remainder = 0;
 
     if (_ticksPerStep > 0) {
         const int32_t b = (int32_t)_ticksPerStep;
-        stepDelta = uepcnt_div_floor_ticks(totalTicks, b);
-        remainder = totalTicks - stepDelta * b;
+        stepDeltaRaw = uepcnt_div_floor_ticks(totalTicks, b);
+        remainder = totalTicks - stepDeltaRaw * b;
     } else {
-        stepDelta = totalTicks;
+        stepDeltaRaw = totalTicks;
         remainder = 0;
     }
 
-    _tickRemainder = remainder;
-    _positionSteps += (int64_t)stepDelta;
+    int32_t stepDeltaOut = stepDeltaRaw;
 
-    if (stepDelta != 0 && _onStepCb) {
-        _onStepCb(_onStepUser, stepDelta);
+    if (_oppStepMinMs > 0 && stepDeltaRaw != 0) {
+        const int32_t absSd = (stepDeltaRaw >= 0) ? stepDeltaRaw : -stepDeltaRaw;
+        if (absSd == 1) {
+            const int8_t sign = (stepDeltaRaw > 0) ? (int8_t)1 : (int8_t)-1;
+            const uint32_t nowMs = millis();
+            if (_lastEmittedStepSign != 0 && sign != _lastEmittedStepSign) {
+                if (nowMs - _lastEmittedStepMs < _oppStepMinMs) {
+                    stepDeltaOut = 0;
+                }
+            }
+        }
+    }
+
+    if (stepDeltaOut != stepDeltaRaw) {
+        if (_ticksPerStep > 0) {
+            const int32_t b = (int32_t)_ticksPerStep;
+            remainder = totalTicks - stepDeltaOut * b;
+        } else {
+            remainder = totalTicks - stepDeltaOut;
+        }
+    }
+
+    _tickRemainder = remainder;
+    _positionSteps += (int64_t)stepDeltaOut;
+
+    if (stepDeltaOut != 0) {
+        const int8_t sgn = (stepDeltaOut > 0) ? (int8_t)1 : (int8_t)-1;
+        _lastEmittedStepSign = sgn;
+        _lastEmittedStepMs = millis();
+        if (_onStepCb) {
+            _onStepCb(_onStepUser, stepDeltaOut);
+        }
     }
 
 #if UEPCNT_ENABLE_SPEED

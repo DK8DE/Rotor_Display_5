@@ -187,10 +187,15 @@ static float normalize_deg_0_360(float d)
 /**
  * Anzeige: Bus meldet oft 360,00° — normalize_deg_0_360 liefert 0° (gleiche Lage).
  * Dann soll die UI 360° zeigen, nicht 0° (Homing-Endlage / Log: ACK …360,00).
+ * Referenziert: manche Slaves melden 0,0…0,5° statt 360° an der Endlage (Restfehler) —
+ * sonst zeigt Ist/Soll nach Start fälschlich z.B. 0,2° statt 360°.
  */
 static float bus_deg_for_ui(float deg_norm, float deg_raw)
 {
     if (deg_norm < 0.01f && deg_raw >= 359.5f) {
+        return 360.0f;
+    }
+    if (s_slave_referenced && deg_raw >= 0.0f && deg_raw <= 0.5f && deg_norm <= 0.5f) {
         return 360.0f;
     }
     return deg_norm;

@@ -102,8 +102,15 @@ static constexpr int ENCODER_DELTA_TENTHS_PER_STEP = 10;
  * PCNT-Hardware-Glitchfilter (Nanosekunden): Pulse kürzer als dieser Wert zählen nicht.
  * Vorher 200 ns ≈ aus; mechanische Drehgeber profitieren oft von 2–10 µs.
  * Zu groß: sehr schnelles Drehen kann Schritte „verschlucken“. 0 = Filter aus.
+ * Sinnvoll typ. 0,3–1 ms (UEPCNT_DEFAULT_GLITCH_NS in UltraEncoderPCNT.h).
  */
-static constexpr uint32_t ENCODER_GLITCH_NS = 8000u;
+static constexpr uint32_t ENCODER_GLITCH_NS = UEPCNT_DEFAULT_GLITCH_NS;
+
+/**
+ * Gegenrichtungs-Filter (UltraEncoderPCNT::setOppositeStepMinMs): nur Einzelschritt |delta|==1.
+ * Kurze falsche Richtungsimpulse unterdrücken; 0 = aus. Tuning wie encoder_test (typ. 35–50 ms).
+ */
+static constexpr uint32_t ENCODER_OPPOSITE_STEP_MIN_MS = 42u;
 
 /** Quadratur-Encoder über PCNT (UltraEncoderPCNT). */
 static UltraEncoderPCNT *s_ultra_enc = nullptr;
@@ -208,6 +215,7 @@ void setup()
         Serial.println("UltraEncoderPCNT begin failed");
     } else {
         s_ultra_enc->setPositionSteps(0);
+        s_ultra_enc->setOppositeStepMinMs(ENCODER_OPPOSITE_STEP_MIN_MS);
         s_ultra_enc->setStepCallback(ultra_encoder_on_step, nullptr);
     }
 
