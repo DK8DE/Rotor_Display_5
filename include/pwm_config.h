@@ -16,6 +16,11 @@ void pwm_config_save(void);
 uint8_t pwm_config_get_slow(void);
 uint8_t pwm_config_get_fast(void);
 
+/** RS485: eigene Master-ID (1…254), Default 2 */
+uint8_t pwm_config_get_master_id(void);
+/** RS485: Rotor-Slave-ID (1…254, nicht 255/Broadcast), Default 20 */
+uint8_t pwm_config_get_rotor_id(void);
+
 /** Antennen-UI: 1…3 */
 uint8_t pwm_config_get_last_antenna(void);
 void pwm_config_set_last_antenna(uint8_t n);

@@ -13,7 +13,7 @@
 objects_t objects;
 
 static const char *screen_names[] = { "Main" };
-static const char *object_names[] = { "main", "kompass_bg", "grad_acc", "hauptanzeige", "position", "label_gradzeichen_a", "label_gradzeichen_t", "actual_dg", "taget_dg", "label_actual", "meldetext", "label_target", "homing_led", "fast_menue", "slow", "label__slow", "fast", "label_fast", "ref", "ref_label", "fast_menue_1", "antenna_1", "antenna_1_label", "antenna_2", "antenna_2_label", "antenna_3", "antenna_3_label", "temperaturen_wind", "label_wind_speed", "pfeil_wind", "label_aussen_temp", "engine_temperature", "wind_speed" };
+static const char *object_names[] = { "main", "kompass_bg", "grad_acc", "hauptanzeige", "position", "label_gradzeichen_a", "label_gradzeichen_t", "actual_dg", "taget_dg", "label_actual", "meldetext", "label_target", "homing_led", "fast_menue", "slow", "label__slow", "fast", "label_fast", "ref", "ref_label", "fast_menue_1", "antenna_1", "antenna_1_label", "antenna_2", "antenna_2_label", "antenna_3", "antenna_3_label", "temperaturen_wind", "label_wind_speed", "pfeil_wind", "label_aussen_temp", "temperature", "wind_speed" };
 
 //
 // Event handlers
@@ -273,7 +273,7 @@ void create_screen_main() {
                             objects.antenna_1 = obj;
                             lv_obj_set_pos(obj, 37, 28);
                             lv_obj_set_size(obj, 185, 44);
-                            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff2196f3), LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_obj_set_style_bg_color(obj, lv_color_hex(0xff087321), LV_PART_MAIN | LV_STATE_DEFAULT);
                             {
                                 lv_obj_t *parent_obj = obj;
                                 {
@@ -370,9 +370,9 @@ void create_screen_main() {
                             lv_label_set_text(obj, "°C");
                         }
                         {
-                            // Engine Temperature
+                            // Temperature
                             lv_obj_t *obj = lv_textarea_create(parent_obj);
-                            objects.engine_temperature = obj;
+                            objects.temperature = obj;
                             lv_obj_set_pos(obj, 71, 213);
                             lv_obj_set_size(obj, 69, 37);
                             lv_textarea_set_max_length(obj, 128);

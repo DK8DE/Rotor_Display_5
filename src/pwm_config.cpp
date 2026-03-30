@@ -1,5 +1,5 @@
 /**
- * config.json auf FFat (data/ → uploadfs): PWM, Antennen-Bezeichner, Versätze, letzte Antenne.
+ * config.json auf FFat (data/ → uploadfs): PWM, RS485-IDs, Antennen-Bezeichner, Versätze, letzte Antenne.
  */
 
 #include "pwm_config.h"
@@ -14,6 +14,8 @@
 
 static uint8_t s_slow = 50;
 static uint8_t s_fast = 100;
+static uint8_t s_master_id = 2;
+static uint8_t s_rotor_id = 20;
 
 static char s_ant_label[3][48];
 static uint8_t s_last_antenna = 1;
@@ -121,6 +123,8 @@ void pwm_config_load_defaults(void)
     s_ant_label[1][sizeof(s_ant_label[1]) - 1] = '\0';
     s_ant_label[2][sizeof(s_ant_label[2]) - 1] = '\0';
     s_antoff_deg[0] = s_antoff_deg[1] = s_antoff_deg[2] = 0.0f;
+    s_master_id = 2;
+    s_rotor_id = 20;
 }
 
 void pwm_config_load(void)
@@ -142,6 +146,14 @@ void pwm_config_load(void)
     }
     if (b >= 0 && b <= 100) {
         s_fast = (uint8_t)b;
+    }
+    int mid = parse_int_after_key(buf, "master_id");
+    if (mid >= 1 && mid <= 254) {
+        s_master_id = (uint8_t)mid;
+    }
+    int rid = parse_int_after_key(buf, "rotor_id");
+    if (rid >= 1 && rid <= 254) {
+        s_rotor_id = (uint8_t)rid;
     }
     int la = parse_int_after_key(buf, "last_antenna");
     if (la >= 1 && la <= 3) {
@@ -185,6 +197,8 @@ void pwm_config_save(void)
              "{\n"
              "  \"slow_pwm\": %u,\n"
              "  \"fast_pwm\": %u,\n"
+             "  \"master_id\": %u,\n"
+             "  \"rotor_id\": %u,\n"
              "  \"antenna_1_label\": \"%s\",\n"
              "  \"antenna_2_label\": \"%s\",\n"
              "  \"antenna_3_label\": \"%s\",\n"
@@ -193,7 +207,8 @@ void pwm_config_save(void)
              "  \"antoff2_deg\": %.2f,\n"
              "  \"antoff3_deg\": %.2f\n"
              "}\n",
-             (unsigned)s_slow, (unsigned)s_fast, e1, e2, e3, (unsigned)s_last_antenna,
+             (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_master_id, (unsigned)s_rotor_id, e1, e2, e3,
+             (unsigned)s_last_antenna,
              (double)s_antoff_deg[0], (double)s_antoff_deg[1], (double)s_antoff_deg[2]);
     f.print(line);
     f.close();
@@ -207,6 +222,16 @@ uint8_t pwm_config_get_slow(void)
 uint8_t pwm_config_get_fast(void)
 {
     return s_fast;
+}
+
+uint8_t pwm_config_get_master_id(void)
+{
+    return s_master_id;
+}
+
+uint8_t pwm_config_get_rotor_id(void)
+{
+    return s_rotor_id;
 }
 
 uint8_t pwm_config_get_last_antenna(void)

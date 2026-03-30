@@ -10,6 +10,9 @@ void rotor_app_init(void);
 /** Slow/Fast-SETPWM: erneuter Versuch wenn Bus frei (nach Klick) + einmal Boot Fast-PWM. */
 void rotor_pwm_ui_loop(void);
 
+/** Nach serial_bridge::poll + rotor_rs485_idle_tasks aus loop() — Label wind_speed / temperature. */
+void rotor_app_weather_ui_poll(void);
+
 /**
  * Encoder: delta_tenths = Änderung in Zehntelgraden (Skalierung z. B. in main).
  * SETPOSDG erst nach 200 ms ohne neuen Tick; rotor_app_loop() aus loop() aufrufen (Retry bei blockiertem Bus).

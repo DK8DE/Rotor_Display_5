@@ -5,6 +5,7 @@
  *
  * Bus-Regel: Pro Anfrage ein ausstehendes Telegramm; nächste Anfrage erst nach ACK (oder Timeout).
  * SETASELECT (DST 255): kein Pending/ACK — sofort senden.
+ * GETANEMO/GETTEMPA: nur Stillstand, ohne Fremd-PC; ACKs werden auch bei PC-Mitlesen ausgewertet.
  */
 
 #include "rotor_rs485.h"
@@ -61,6 +62,16 @@ extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3);
 #define ROTOR_POLL_GETERR_MS 5000u
 #endif
 
+/** Kein Fremd-Master → Rotor mehr so lange → eigenes GET-Polling wieder an */
+#ifndef ROTOR_PC_FOREIGN_SILENCE_MS
+#define ROTOR_PC_FOREIGN_SILENCE_MS 3000u
+#endif
+
+/** Abstand GETANEMO ↔ GETTEMPA (wechselnd); jede Größe alle 2 s */
+#ifndef ROTOR_WEATHER_STAGGER_MS
+#define ROTOR_WEATHER_STAGGER_MS 1000u
+#endif
+
 enum class Pending : uint8_t {
     None,
     GetRef,
@@ -72,7 +83,9 @@ enum class Pending : uint8_t {
     SetPwm,
     GetAntOff1,
     GetAntOff2,
-    GetAntOff3
+    GetAntOff3,
+    GetAnemo,
+    GetTempA
 };
 
 static uint8_t s_master_id = ROTOR_RS485_MASTER_ID;
@@ -81,6 +94,15 @@ static uint8_t s_slave_id = ROTOR_RS485_SLAVE_ID;
 static rotor_rs485_ref_cb_t s_ref_cb = nullptr;
 static rotor_rs485_pos_cb_t s_pos_cb = nullptr;
 static rotor_rs485_target_cb_t s_target_cb = nullptr;
+
+/** Nicht im UART-Parser: pwm_config_save + rotor_app_antenna_offset_changed */
+static bool s_pending_pwm_save = false;
+static bool s_pending_antenna_offset_notify = false;
+
+/** ACK_GETANEMO / ACK_GETTEMPA (Anzeige in loop(), nicht im Parser) */
+static float s_last_wind_kmh = 0.0f;
+static float s_last_tempa_c = 0.0f;
+static uint8_t s_weather_dirty_mask = 0;
 
 static Pending s_pending = Pending::None;
 static uint32_t s_pending_since_ms = 0;
@@ -129,6 +151,13 @@ static uint8_t s_setpwm_value = 0;
 static bool s_antenna_boot_pending = true;
 static uint8_t s_antenna_boot_phase = 0;
 
+/** Zuletzt #FremdMaster:RotorID:… gesehen (Millis); 0 = noch keiner */
+static uint32_t s_last_foreign_master_to_slave_ms = 0;
+
+/** Nächster GETANEMO/GETTEMPA-Takt (nur ohne PC, Stillstand); false = als Nächstes ANEMO */
+static uint32_t s_next_weather_ms = 0;
+static bool s_weather_next_is_temp = false;
+
 static void abort_antenna_boot(void)
 {
     s_antenna_boot_pending = false;
@@ -144,6 +173,35 @@ void rotor_rs485_set_ref_callback(rotor_rs485_ref_cb_t cb) { s_ref_cb = cb; }
 void rotor_rs485_set_position_callback(rotor_rs485_pos_cb_t cb) { s_pos_cb = cb; }
 void rotor_rs485_set_target_callback(rotor_rs485_target_cb_t cb) { s_target_cb = cb; }
 
+void rotor_rs485_idle_tasks(void)
+{
+    if (s_pending_pwm_save) {
+        s_pending_pwm_save = false;
+        pwm_config_save();
+    }
+    if (s_pending_antenna_offset_notify) {
+        s_pending_antenna_offset_notify = false;
+        rotor_app_antenna_offset_changed();
+    }
+}
+
+float rotor_rs485_get_last_wind_kmh(void)
+{
+    return s_last_wind_kmh;
+}
+
+float rotor_rs485_get_last_tempa_c(void)
+{
+    return s_last_tempa_c;
+}
+
+uint8_t rotor_rs485_weather_ui_take_mask(void)
+{
+    const uint8_t m = s_weather_dirty_mask;
+    s_weather_dirty_mask = 0;
+    return m;
+}
+
 bool rotor_rs485_is_boot_done(void) { return s_boot_done; }
 
 bool rotor_rs485_is_referenced(void) { return s_slave_referenced; }
@@ -155,6 +213,14 @@ bool rotor_rs485_is_homing(void) { return s_poll_ref && !s_slave_referenced; }
 bool rotor_rs485_is_position_polling(void) { return s_poll_pos; }
 
 float rotor_rs485_get_last_position_deg(void) { return s_last_pos_ui_deg; }
+
+bool rotor_rs485_is_foreign_pc_listen_mode(void)
+{
+    if (s_last_foreign_master_to_slave_ms == 0) {
+        return false;
+    }
+    return (millis() - s_last_foreign_master_to_slave_ms) < ROTOR_PC_FOREIGN_SILENCE_MS;
+}
 
 static void clear_pending()
 {
@@ -354,7 +420,8 @@ bool rotor_rs485_send_stop(void)
     if (s_pending == Pending::SetPosDg || s_pending == Pending::SetRef) {
         return false;
     }
-    if (s_pending == Pending::GetPosDg || s_pending == Pending::GetRef) {
+    if (s_pending == Pending::GetPosDg || s_pending == Pending::GetRef ||
+        s_pending == Pending::GetAnemo || s_pending == Pending::GetTempA) {
         clear_pending();
     }
     if (s_pending != Pending::None) {
@@ -395,6 +462,9 @@ bool rotor_rs485_send_set_pwm_limit(uint8_t pct)
     if (s_pending == Pending::GetPosDg) {
         clear_pending();
     }
+    if (s_pending == Pending::GetAnemo || s_pending == Pending::GetTempA) {
+        clear_pending();
+    }
     if (s_pending == Pending::GetAntOff1 || s_pending == Pending::GetAntOff2 ||
         s_pending == Pending::GetAntOff3) {
         clear_pending();
@@ -419,6 +489,9 @@ bool rotor_rs485_goto_degrees(float deg)
         return false;
     }
     if (s_pending == Pending::GetPosDg) {
+        clear_pending();
+    }
+    if (s_pending == Pending::GetAnemo || s_pending == Pending::GetTempA) {
         clear_pending();
     }
     if (s_pending == Pending::GetAntOff1 || s_pending == Pending::GetAntOff2 ||
@@ -479,6 +552,59 @@ static void notify_target(float deg)
     if (s_target_cb) {
         s_target_cb(deg);
     }
+}
+
+/** Erster Zahlenwert im PARAMS nach ACK-Tag (bis zum nächsten ':') */
+static bool parse_ack_first_param_float(const char *line, const char *ack_tag, float *out)
+{
+    const char *p = strstr(line, ack_tag);
+    if (!p) {
+        return false;
+    }
+    p += strlen(ack_tag);
+    if (*p == '\0') {
+        return false;
+    }
+    char valbuf[32];
+    size_t i = 0;
+    while (*p && *p != ':' && i + 1 < sizeof(valbuf)) {
+        valbuf[i++] = (*p == ',') ? '.' : *p;
+        p++;
+    }
+    valbuf[i] = '\0';
+    if (i == 0) {
+        return false;
+    }
+    *out = strtof(valbuf, nullptr);
+    return true;
+}
+
+static bool parse_ack_getanemo(const char *line)
+{
+    float v = 0.0f;
+    if (!parse_ack_first_param_float(line, ":ACK_GETANEMO:", &v)) {
+        return false;
+    }
+    if (s_pending == Pending::GetAnemo) {
+        clear_pending();
+    }
+    s_last_wind_kmh = v;
+    s_weather_dirty_mask |= 1u;
+    return true;
+}
+
+static bool parse_ack_gettempa(const char *line)
+{
+    float v = 0.0f;
+    if (!parse_ack_first_param_float(line, ":ACK_GETTEMPA:", &v)) {
+        return false;
+    }
+    if (s_pending == Pending::GetTempA) {
+        clear_pending();
+    }
+    s_last_tempa_c = v;
+    s_weather_dirty_mask |= 2u;
+    return true;
 }
 
 /** #SRC:DST:… */
@@ -561,8 +687,8 @@ static void sniff_setantoff_to_slave(const char *line)
         tmp[n] = '\0';
         const float v = normalize_deg_0_360(strtof(tmp, nullptr));
         pwm_config_set_antoff_deg(tags[i].idx, v);
-        pwm_config_save();
-        rotor_app_antenna_offset_changed();
+        s_pending_pwm_save = true;
+        s_pending_antenna_offset_notify = true;
         return;
     }
 }
@@ -580,6 +706,20 @@ static void on_ack_timeout()
 {
     if (!pending_timed_out()) {
         return;
+    }
+    /* Fremd-Master bedient den Rotor: eigene GET-*-Pending nicht endlos wiederholen (Kollision). */
+    if (rotor_rs485_is_foreign_pc_listen_mode()) {
+        switch (s_pending) {
+        case Pending::GetRef:
+        case Pending::GetPosDg:
+        case Pending::GetErr:
+        case Pending::GetAnemo:
+        case Pending::GetTempA:
+            clear_pending();
+            return;
+        default:
+            break;
+        }
     }
     /* Kein clear_pending: dasselbe Telegramm erneut (Kollision / fehlendes ACK). */
     switch (s_pending) {
@@ -619,6 +759,12 @@ static void on_ack_timeout()
     case Pending::GetAntOff3:
         send_request("GETANTOFF3", "1", Pending::GetAntOff3);
         break;
+    case Pending::GetAnemo:
+        send_request("GETANEMO", "0", Pending::GetAnemo);
+        break;
+    case Pending::GetTempA:
+        send_request("GETTEMPA", "0", Pending::GetTempA);
+        break;
     case Pending::None:
     default:
         clear_pending();
@@ -637,7 +783,7 @@ static bool parse_ack_setposdg_result(const char *line)
         clear_pending();
         s_hw_snap_retarget_active = false;
     }
-    if (s_poll_pos) {
+    if (s_poll_pos && !rotor_rs485_is_foreign_pc_listen_mode()) {
         send_request("GETPOSDG", "0", Pending::GetPosDg);
     }
     return true;
@@ -754,10 +900,10 @@ static bool parse_ack_getantoff3(const char *line)
         clear_pending();
     }
     if (s_antenna_boot_pending && s_antenna_boot_phase == 3 && was) {
-        pwm_config_save();
         s_antenna_boot_pending = false;
         s_antenna_boot_phase = 0;
-        rotor_app_antenna_offset_changed();
+        s_pending_pwm_save = true;
+        s_pending_antenna_offset_notify = true;
     }
     return true;
 }
@@ -972,6 +1118,14 @@ static bool parse_nak_and_clear(const char *line)
         clear_pending();
         return true;
     }
+    if (strstr(line, ":NAK_GETANEMO:") && s_pending == Pending::GetAnemo) {
+        clear_pending();
+        return true;
+    }
+    if (strstr(line, ":NAK_GETTEMPA:") && s_pending == Pending::GetTempA) {
+        clear_pending();
+        return true;
+    }
     return false;
 }
 
@@ -1026,6 +1180,11 @@ static void process_complete_line(const char *line, size_t len)
         return;
     }
 
+    /* Anderer Master spricht unseren Rotor an → Mitläufer-Modus (GET-Polling aus loop aussetzen). */
+    if (dst == (unsigned)s_slave_id && src != (unsigned)s_master_id) {
+        s_last_foreign_master_to_slave_ms = millis();
+    }
+
     /* Broadcast SETASELECT: auch bei SRC = eigene Master-ID (USB-Loopback vom PC; kein Echo von hw_send). */
     if (dst == ROTOR_RS485_BROADCAST_ID) {
         if (strstr(line, ":SETASELECT:")) {
@@ -1070,6 +1229,12 @@ static void process_complete_line(const char *line, size_t len)
             return;
         }
         if (parse_ack_err(line)) {
+            return;
+        }
+        if (parse_ack_getanemo(line)) {
+            return;
+        }
+        if (parse_ack_gettempa(line)) {
             return;
         }
         if (parse_ack_getref(line)) {
@@ -1121,6 +1286,8 @@ void rotor_rs485_init(void)
     s_hw_snap_retarget_active = false;
     s_antenna_boot_pending = true;
     s_antenna_boot_phase = 0;
+    s_next_weather_ms = millis() + 2000u;
+    s_weather_next_is_temp = false;
 }
 
 static void try_boot_getref()
@@ -1151,6 +1318,27 @@ static void try_antenna_boot_first_get(void)
     s_antenna_boot_phase = 1;
 }
 
+/** GETANEMO / GETTEMPA nur ohne Fremd-PC, Stillstand (kein Homing-/Positions-Polling). */
+static void try_weather_poll(void)
+{
+    if (!s_boot_done || s_poll_pos || s_poll_ref) {
+        return;
+    }
+    if (s_antenna_boot_pending && s_antenna_boot_phase != 0) {
+        return;
+    }
+    if ((int32_t)(millis() - s_next_weather_ms) < 0) {
+        return;
+    }
+    if (s_weather_next_is_temp) {
+        send_request("GETTEMPA", "0", Pending::GetTempA);
+    } else {
+        send_request("GETANEMO", "0", Pending::GetAnemo);
+    }
+    s_weather_next_is_temp = !s_weather_next_is_temp;
+    s_next_weather_ms = millis() + ROTOR_WEATHER_STAGGER_MS;
+}
+
 void rotor_rs485_loop(void)
 {
     on_ack_timeout();
@@ -1163,6 +1351,10 @@ void rotor_rs485_loop(void)
     try_hw_snap_retarget();
 
     if (s_pending != Pending::None) {
+        return;
+    }
+
+    if (rotor_rs485_is_foreign_pc_listen_mode()) {
         return;
     }
 
@@ -1201,5 +1393,8 @@ void rotor_rs485_loop(void)
     if (s_boot_done && (int32_t)(millis() - s_next_geterr_ms) >= 0) {
         send_request("GETERR", "0", Pending::GetErr);
         s_next_geterr_ms = millis() + ROTOR_POLL_GETERR_MS;
+        return;
     }
+
+    try_weather_poll();
 }

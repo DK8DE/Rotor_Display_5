@@ -47,7 +47,7 @@ typedef struct _objects_t {
     lv_obj_t *label_wind_speed;
     lv_obj_t *pfeil_wind;
     lv_obj_t *label_aussen_temp;
-    lv_obj_t *engine_temperature;
+    lv_obj_t *temperature;
     lv_obj_t *wind_speed;
 } objects_t;
 

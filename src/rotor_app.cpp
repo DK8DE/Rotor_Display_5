@@ -254,6 +254,7 @@ static void fmt_de(char *buf, size_t n, float deg)
     }
 }
 
+/** RS485-Pfad darf nicht direkt lvgl_port_lock + Label setzen (WDT/Deadlock mit LVGL-Task). */
 static void on_ref_status(bool referenced)
 {
     lvgl_port_lock(-1);
@@ -377,8 +378,8 @@ static void on_arc(lv_event_t *e)
 
 extern "C" void rotor_app_init(void)
 {
-    rotor_rs485_set_master_id(2);
-    rotor_rs485_set_slave_id(20);
+    rotor_rs485_set_master_id(pwm_config_get_master_id());
+    rotor_rs485_set_slave_id(pwm_config_get_rotor_id());
     rotor_rs485_set_ref_callback(on_ref_status);
     rotor_rs485_set_position_callback(on_position_deg);
     rotor_rs485_set_target_callback(on_target_deg);
@@ -483,6 +484,35 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
 extern "C" void rotor_app_antenna_offset_changed(void)
 {
     on_position_deg(s_last_bus_ist_deg);
+}
+
+/**
+ * Wind/Temperatur: Werte kommen im RS485-Parser an; Anzeige hier in loop() (nicht im Parser / kein lv_async).
+ */
+extern "C" void rotor_app_weather_ui_poll(void)
+{
+    const uint8_t m = rotor_rs485_weather_ui_take_mask();
+    if (m == 0) {
+        return;
+    }
+    const float w = rotor_rs485_get_last_wind_kmh();
+    const float t = rotor_rs485_get_last_tempa_c();
+    lvgl_port_lock(-1);
+    char buf[24];
+    /* EEZ: wind_speed / temperature sind lv_textarea (max. Wind 5 Zeichen), keine lv_label */
+    if (m & 1u) {
+        snprintf(buf, sizeof(buf), "%.0f", w);
+        if (objects.wind_speed) {
+            lv_textarea_set_text(objects.wind_speed, buf);
+        }
+    }
+    if (m & 2u) {
+        snprintf(buf, sizeof(buf), "%.1f", t);
+        if (objects.temperature) {
+            lv_textarea_set_text(objects.temperature, buf);
+        }
+    }
+    lvgl_port_unlock();
 }
 
 extern "C" void rotor_pwm_ui_loop(void)

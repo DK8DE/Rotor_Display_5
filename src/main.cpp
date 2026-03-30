@@ -96,7 +96,7 @@ using namespace esp_panel::board;
  * Schritte kommen per UltraEncoderStepCallback direkt aus dem PCNT-Service-Task — kein 1-ms-Polling,
  * sonst können feine Schritte mit dem internen Flush (Watch/Timeout) kollidieren.
  */
-static constexpr int ENCODER_DELTA_TENTHS_PER_STEP = 10;
+static constexpr int ENCODER_DELTA_TENTHS_PER_STEP = 1;
 
 /**
  * PCNT-Hardware-Glitchfilter (Nanosekunden): Pulse kürzer als dieser Wert zählen nicht.
@@ -254,10 +254,13 @@ void loop()
 {
     /* RS485-Empfang zuerst (USB spiegeln + Parser) — kann Pending löschen (ACK) */
     serial_bridge::poll();
+    /* Flash/LVGL nicht im Zeilenparser — direkt nach poll */
+    rotor_rs485_idle_tasks();
     /* Encoder-SETPOS-Retry sofort nach frei werdendem Bus, bevor wieder GETPOSDG gestartet wird */
     rotor_app_loop();
     rotor_pwm_ui_loop();
     rotor_rs485_loop();
+    rotor_app_weather_ui_poll();
     rotor_error_app_loop(millis());
     signals_ring_app_loop(millis());
 

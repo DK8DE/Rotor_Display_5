@@ -90,9 +90,10 @@ void begin()
     pinMode(kPinRs485Dir, OUTPUT);
     dir_receive();
 
-    s_hw->begin(s_baud, SERIAL_8N1, kPinUartRx, kPinUartTx);
+    /* Muss vor begin() — sonst [E] HardwareSerial „can't be resized when already running“ */
     s_hw->setRxBufferSize(1024);
     s_hw->setTxBufferSize(1024);
+    s_hw->begin(s_baud, SERIAL_8N1, kPinUartRx, kPinUartTx);
 }
 
 static void pump_usb_to_hw()

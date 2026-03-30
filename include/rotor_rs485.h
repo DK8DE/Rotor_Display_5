@@ -45,9 +45,28 @@ void rotor_rs485_rx_bytes(const uint8_t *data, size_t len);
 /** Aus loop() aufrufen: ggf. GETREF/GETPOSDG-Polling (Empfang passiert in serial_bridge::poll). */
 void rotor_rs485_loop(void);
 
+/**
+ * True, wenn ein anderer Master (SRC ≠ rotor_rs485_set_master_id) den Rotor (DST = Slave-ID) anfragt
+ * und kürzlich Traffic war — dann sendet der Controller kein eigenes GET-Polling (nur Mitlesen).
+ * Voraussetzung: PC/Software nutzt eine andere Master-ID als der Controller.
+ */
+bool rotor_rs485_is_foreign_pc_listen_mode(void);
+
 void rotor_rs485_set_ref_callback(rotor_rs485_ref_cb_t cb);
 void rotor_rs485_set_position_callback(rotor_rs485_pos_cb_t cb);
 void rotor_rs485_set_target_callback(rotor_rs485_target_cb_t cb);
+
+/**
+ * Nach serial_bridge::poll() aufrufen: NVS/config.json schreiben und Antennen-UI nachziehen —
+ * darf nicht im RS485-Zeilenparser laufen (Flash blockiert, LVGL).
+ */
+void rotor_rs485_idle_tasks(void);
+
+/** Letzte Werte aus ACK_GETANEMO / ACK_GETTEMPA (auch PC-Mitlesen). */
+float rotor_rs485_get_last_wind_kmh(void);
+float rotor_rs485_get_last_tempa_c(void);
+/** Bit 1 = Wind neu, Bit 2 = Temp neu; liest aus und löscht die Maske. */
+uint8_t rotor_rs485_weather_ui_take_mask(void);
 
 /** Einmal GETREF (z. B. beim Start). */
 void rotor_rs485_send_getref(void);

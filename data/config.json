@@ -1,6 +1,8 @@
 {
   "slow_pwm": 50,
   "fast_pwm": 100,
+  "master_id": 2,
+  "rotor_id": 20,
   "antenna_1_label": "KW Beam",
   "antenna_2_label": "2m / 70cm",
   "antenna_3_label": "23 cm",
