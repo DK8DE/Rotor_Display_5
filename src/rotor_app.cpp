@@ -21,6 +21,9 @@
 
 extern "C" void rotor_app_antenna_offset_changed(void);
 
+/** EEZ-Export: lv_img_set_angle am Pfeil; nach Init auf 0, Drehung nur per Style-Transform (siehe rotor_app_init). */
+static int16_t s_pfeil_wind_eez_base_angle01 = 0;
+
 static bool s_arc_dragging = false;
 /** Zwischen PRESSED und RELEASED: mindestens ein VALUE_CHANGED (echter Dreh am Arc)? */
 static bool s_arc_moved_this_press = false;
@@ -412,6 +415,17 @@ extern "C" void rotor_app_init(void)
     if (objects.antenna_3) {
         lv_obj_add_event_cb(objects.antenna_3, on_antenna_btn, LV_EVENT_CLICKED, nullptr);
     }
+    /* Windpfeil: EEZ (screens.c) unverändert lassen — REAL+lv_img_set_angle clippt falsch (1px-Strich).
+     * Laufzeit: VIRTUAL erzwingen, EEZ-Winkel lesen, lv_img-Winkel aus, Drehung per Objekt-Style (Pivot Mitte). */
+    if (objects.pfeil_wind) {
+        s_pfeil_wind_eez_base_angle01 = static_cast<int16_t>(lv_img_get_angle(objects.pfeil_wind));
+        lv_img_set_size_mode(objects.pfeil_wind, LV_IMG_SIZE_MODE_VIRTUAL);
+        lv_img_set_angle(objects.pfeil_wind, 0);
+        lv_obj_update_layout(objects.pfeil_wind);
+        lv_obj_set_style_transform_pivot_x(objects.pfeil_wind, lv_pct(50), 0);
+        lv_obj_set_style_transform_pivot_y(objects.pfeil_wind, lv_pct(50), 0);
+        lv_obj_set_style_transform_angle(objects.pfeil_wind, s_pfeil_wind_eez_base_angle01, 0);
+    }
     /* GETREF/GETPOSDG nach 2 s Bus-Bereitschaft — siehe rotor_rs485_init / rotor_rs485_loop */
 }
 
@@ -487,7 +501,9 @@ extern "C" void rotor_app_antenna_offset_changed(void)
 }
 
 /**
- * Wind/Temperatur: Werte kommen im RS485-Parser an; Anzeige hier in loop() (nicht im Parser / kein lv_async).
+ * Wind/Temperatur/Windrichtung: Werte im Parser; UI hier in loop() (nicht im Parser / kein lv_async).
+ * Windrichtung: Drehung per lv_obj_set_style_transform_angle (Pivot 50%), nicht lv_img_set_angle;
+ * Basis aus EEZ-Snapshot s_pfeil_wind_eez_base_angle01 + Meteor (0,1°).
  */
 extern "C" void rotor_app_weather_ui_poll(void)
 {
@@ -497,6 +513,7 @@ extern "C" void rotor_app_weather_ui_poll(void)
     }
     const float w = rotor_rs485_get_last_wind_kmh();
     const float t = rotor_rs485_get_last_tempa_c();
+    const float dir = rotor_rs485_get_last_wind_dir_deg();
     lvgl_port_lock(-1);
     char buf[24];
     /* EEZ: wind_speed / temperature sind lv_textarea (Wind max. 5 Zeichen, z. B. „123,4“), keine lv_label */
@@ -514,6 +531,19 @@ extern "C" void rotor_app_weather_ui_poll(void)
         fmt_de(buf, sizeof(buf), t);
         if (objects.temperature) {
             lv_textarea_set_text(objects.temperature, buf);
+        }
+    }
+    if (m & 4u) {
+        if (objects.pfeil_wind) {
+            int32_t ang = static_cast<int32_t>(s_pfeil_wind_eez_base_angle01)
+                + static_cast<int32_t>(dir * 10.0f + 0.5f);
+            while (ang >= 3600) {
+                ang -= 3600;
+            }
+            while (ang < 0) {
+                ang += 3600;
+            }
+            lv_obj_set_style_transform_angle(objects.pfeil_wind, static_cast<lv_coord_t>(ang), 0);
         }
     }
     lvgl_port_unlock();

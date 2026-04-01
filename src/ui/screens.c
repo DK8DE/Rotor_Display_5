@@ -357,7 +357,8 @@ void create_screen_main() {
                             lv_obj_set_pos(obj, 97, 77);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_img_set_src(obj, "S:/img/ui_image_pfeil_wind.bin");
-                            lv_img_set_size_mode(obj, LV_IMG_SIZE_MODE_REAL);
+                            /* Kein REAL: mit lv_img_set_angle (rotor_app) passt Objektgröße/Pivot nicht → Pfeil weg.
+                             * EEZ: Winkel 0°; Drehung nur per Code — entspricht LV_IMG_SIZE_MODE_VIRTUAL (Default). */
                             lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICK_FOCUSABLE);
                         }
                         {
