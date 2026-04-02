@@ -21,6 +21,9 @@ void rotor_app_weather_ui_poll(void);
 void rotor_app_encoder_step(int delta_tenths);
 void rotor_app_loop(void);
 
+/** Noch nicht abgearbeitete Encoder-Rasten ±1 (main.cpp); für on_target_deg: Bus nicht vor encoder_process_pending überschreiben. */
+int rotor_encoder_pending_detents(void);
+
 /**
  * Encoder-Session beenden, Soll-Anzeige + internen Soll auf deg setzen (z. B. Hardware-Taster: Ziel = Ist).
  * Muss vor rotor_rs485_goto_degrees(deg) aufgerufen werden, sonst blockiert on_target_deg und

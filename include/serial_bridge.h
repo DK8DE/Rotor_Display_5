@@ -14,7 +14,7 @@ void set_baud(uint32_t baud);
 /** UART2 auf RX/TX-Pins, RS485-Dir-Pin; USB-Serial muss bereits initialisiert sein. */
 void begin();
 
-/** In loop() sehr oft aufrufen (non-blocking). */
+/** Eine Runde USB↔UART; typischerweise am Anfang von Arduino loop(). */
 void poll();
 
 /**

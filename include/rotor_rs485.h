@@ -96,6 +96,13 @@ bool rotor_rs485_is_homing(void);
 /** True nach SETPOSDG bis Ist ≈ Soll (GETPOSDG-Polling / Positionsfahrt). */
 bool rotor_rs485_is_position_polling(void);
 
+/**
+ * True, wenn SETPOSDG vom Bus geschnüffelt wurde (z. B. PC über USB), ohne dass das Display
+ * GETPOSDG-Polling gestartet hat — Fahrt läuft, aber is_moving() ist false.
+ * Für HW-Taster STOP (siehe main SingleClickCb).
+ */
+bool rotor_rs485_is_remote_setpos_motion(void);
+
 /** Letzte Ist-Position für UI (GETPOSDG), in Grad. */
 float rotor_rs485_get_last_position_deg(void);
 

@@ -57,8 +57,12 @@ static knob_dev_t *s_head_handle = NULL;
 static esp_timer_handle_t s_knob_timer_handle;
 static bool s_is_timer_running = false;
 
-#define TICKS_INTERVAL    3
-#define DEBOUNCE_TICKS    2
+/*
+ * 3 ms × 2 Samples: schnell, aber mechanisch oft Doppel-Events (CCW „überspringt“ eine Zahl).
+ * Etwas längere Abtastung + mehr Samples: stabilere Flanken, weniger Doppel-Klicks.
+ */
+#define TICKS_INTERVAL    4
+#define DEBOUNCE_TICKS    3
 #define HIGH_LIMIT        1000
 #define LOW_LIMIT         -1000
 

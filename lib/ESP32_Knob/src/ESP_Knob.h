@@ -6,6 +6,7 @@
 #pragma once
 
 #include <functional>
+#include <stdint.h>
 #include "base/iot_knob.h"
 
 typedef struct {
@@ -151,14 +152,38 @@ public:
      */
     void detachZeroEventCallback(void);
 
+    /**
+     * @brief Beschleunigung bei schnellem Drehen (kurze Zeit zwischen Rastern, gleiche Richtung).
+     * Der Left/Right-Callback wird pro physischer Raste bis zu max_multiplier-mal aufgerufen
+     * (analog zu „mehr Schritte“ bei schneller PCNT-Folge).
+     *
+     * @param accel_percent 0 = aus, 1–100 Stärke der Hochskalierung
+     * @param threshold_us Wenn Abstand zwischen zwei Events kleiner als dieser Wert ist, wird skaliert (z. B. 70 ms = 70000)
+     * @param max_multiplier Obergrenze (2–16), z. B. 4 → bis zu 4× Callback pro Raste
+     */
+    void setAcceleration(uint8_t accel_percent, uint32_t threshold_us, uint8_t max_multiplier);
+
+    /**
+     * @brief Nach längerer Pause (Standard 200 ms) gilt die nächste Raste wieder als „langsam“ (1×).
+     */
+    void setAccelerationIdleResetUs(uint32_t idle_us);
+
 private:
     static void onEventCallback(void *arg, void *data);
+    int computeAccelSteps(int8_t direction);
 
     knob_handle_t _knob_handle; /**< Knob handle */
 
     int _direction;             /*!< Count increase direction */
     int _gpio_encoder_a;        /*!< Encoder Pin A */
     int _gpio_encoder_b;        /*!< Encoder Pin B */
+
+    uint8_t _accel_percent;           /*!< 0 = Beschleunigung aus */
+    uint32_t _accel_threshold_us;     /*!< Unterhalb: schnelle Folge */
+    uint32_t _accel_idle_reset_us;    /*!< Darüber: neue langsame Raste */
+    uint8_t _accel_max_mult;          /*!< 1–16 */
+    uint64_t _accel_last_event_us;
+    int8_t _accel_last_direction;     /*!< -1 links, +1 rechts, 0 = noch kein Event */
 
     event_callback_data_t _event_data;
     std::function<void(int, void *)> _left_event_cb;    /*!< Callback function for knob left event */

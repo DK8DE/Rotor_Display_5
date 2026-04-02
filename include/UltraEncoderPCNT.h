@@ -54,7 +54,7 @@ typedef void (*UltraEncoderStepCallback)(void *user, int32_t stepDelta);
 
 /** Default PCNT-Glitchfilter (ns). Mechanische Drehgeber: typ. 0,3–1 ms; 0 = aus. */
 #ifndef UEPCNT_DEFAULT_GLITCH_NS
-#define UEPCNT_DEFAULT_GLITCH_NS 600000u
+#define UEPCNT_DEFAULT_GLITCH_NS 800000u
 #endif
 
 // Encoder-Modus (logische Aufloesung)

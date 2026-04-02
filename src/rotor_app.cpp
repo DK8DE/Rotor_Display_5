@@ -36,11 +36,15 @@ static bool s_encoder_goto_retry_pending = false;
 static uint32_t s_encoder_retry_deadline_ms = 0;
 /** Nach letztem Encoder-Tick: erst wenn millis() >= dieser Zeit → SETPOSDG (kein Senden während Drehens) */
 static uint32_t s_encoder_idle_deadline_ms = 0;
+/** millis() beim letzten rotor_app_encoder_step — Bus-Soll darf UI nicht um 0,1° zurücksetzen */
+static uint32_t s_last_encoder_step_ms = 0;
 static float s_encoder_target_deg = 0.0f;
 /** Encoder: Zehntelgrad 0..3599 (±1 pro Klick = ±0,1°); Arc 0..360 = 1°-Schritte */
 static int s_encoder_tenths = 0;
 static constexpr uint32_t ENCODER_BUS_RETRY_MS = 50;
-static constexpr uint32_t ENCODER_SEND_IDLE_MS = 500;
+/** Pause ohne neuen Tick bis SETPOS. War 1400 ms (langsam drehen); Ziel: ~1/3 für schnellere Busreaktion,
+ *  Fallback Session-Start nutzt s_encoder_target_deg (kein Arc-1°-Verlust) bleibt aktiv. */
+static constexpr uint32_t ENCODER_SEND_IDLE_MS = 670;
 /** false (Test): Encoder ändert nur Soll-Text + Bus, Arc bleibt; true: Arc folgt dem Encoder wie bisher */
 static constexpr bool ENCODER_MOVES_ARC = false;
 
@@ -153,31 +157,44 @@ static int wrap_tenths_deg(int t)
     return t;
 }
 
-/** Soll aus taget_dg (z. B. „273,7°“) — gleiche Trunc-Logik wie fmt_de */
+/**
+ * Soll aus taget_dg — ohne strtof: 273,7 bzw. 273.7 exakt als Zehntel 2737 (kein Float-Rundungsfehler
+ * bei .2/.7, der sonst einen Zehntelschritt beim Session-Start frisst).
+ */
 static bool parse_taget_text_to_tenths(int *out_tenths)
 {
     if (!objects.taget_dg || !out_tenths) {
         return false;
     }
-    const char *s = lv_textarea_get_text(objects.taget_dg);
-    if (!s || !*s) {
+    const char *p = lv_textarea_get_text(objects.taget_dg);
+    if (!p || !*p) {
         return false;
     }
-    char buf[32];
-    size_t n = 0;
-    while (s[n] && n < sizeof(buf) - 1U) {
-        buf[n] = (s[n] == ',') ? '.' : s[n];
-        ++n;
+    while (*p == ' ' || *p == '\t') {
+        ++p;
     }
-    buf[n] = '\0';
-    char *end = nullptr;
-    const float deg = std::strtof(buf, &end);
-    if (end == buf) {
+    int hi = 0;
+    bool any_digit = false;
+    while (*p >= '0' && *p <= '9') {
+        any_digit = true;
+        hi = hi * 10 + (*p - '0');
+        if (hi > 4000) {
+            return false;
+        }
+        ++p;
+    }
+    int lo = 0;
+    if (*p == ',' || *p == '.') {
+        ++p;
+        if (*p >= '0' && *p <= '9') {
+            lo = *p - '0';
+            ++p;
+        }
+    }
+    if (!any_digit) {
         return false;
     }
-    /* Epsilon: float (z. B. 255,4°) liegt oft knapp unter n*0,1 → ohne eps: trunc → 255,3 */
-    const int t = static_cast<int>(
-        std::floor(static_cast<double>(deg) * 10.0 + 1e-4));
+    const int t = hi * 10 + lo;
     *out_tenths = wrap_tenths_deg(t);
     return true;
 }
@@ -257,6 +274,51 @@ static void fmt_de(char *buf, size_t n, float deg)
     }
 }
 
+/** Soll-Anzeige taget: immer aus ganzen Zehnteln — kein tenths/10.0f + %.1f (sonst fehlende ,8/,3). */
+static void fmt_taget_from_wrapped_tenths(char *buf, size_t n, int tenths)
+{
+    const int t = wrap_tenths_deg(tenths);
+    snprintf(buf, n, "%d,%d", t / 10, t % 10);
+}
+
+static void fmt_taget_from_display_deg(char *buf, size_t n, float deg)
+{
+    if (deg >= 359.5f) {
+        snprintf(buf, n, "360,0");
+        return;
+    }
+    const int t = wrap_tenths_deg(static_cast<int>(
+        std::floor(static_cast<double>(deg) * 10.0 + 1e-4)));
+    fmt_taget_from_wrapped_tenths(buf, n, t);
+}
+
+/**
+ * EEZ: taget_dg hat max_length + accepted_chars — lv_textarea_set_text() ist für 0,1°-Schritte
+ * unzuverlässig. Internes Label setzen.
+ * Kein lv_textarea_set_cursor_pos(LAST): bei gleicher Cursor-Länge early-exit in LVGL v8 ohne
+ * refr_cursor_area → fehlender Redraw bei nur geänderter Nachkommastelle (Komma-Text).
+ * lv_refr_now(NULL): Refresh sofort, nicht erst beim nächsten lv_timer_handler-Slot.
+ */
+static void taget_dg_set_display_text(const char *buf)
+{
+    if (!objects.taget_dg || !buf) {
+        return;
+    }
+    lv_obj_t *const lab = lv_textarea_get_label(objects.taget_dg);
+    if (!lab) {
+        return;
+    }
+    lv_label_set_text(lab, buf);
+    lv_obj_mark_layout_as_dirty(objects.taget_dg);
+    lv_obj_t *const par = lv_obj_get_parent(objects.taget_dg);
+    if (par) {
+        lv_obj_mark_layout_as_dirty(par);
+    }
+    lv_obj_invalidate(lab);
+    lv_obj_invalidate(objects.taget_dg);
+    lv_refr_now(nullptr);
+}
+
 /** RS485-Pfad darf nicht direkt lvgl_port_lock + Label setzen (WDT/Deadlock mit LVGL-Task). */
 static void on_ref_status(bool referenced)
 {
@@ -281,13 +343,39 @@ static void on_target_deg(float bus_deg)
     if (s_encoder_adjusting) {
         return;
     }
+    /* loop(): serial_bridge/RS485 vor encoder_process_pending — alter Bus-Soll sonst vor dem Encoder-Tick. */
+    if (rotor_encoder_pending_detents() != 0) {
+        return;
+    }
+    const float disp = bus_to_display(bus_deg);
+    /* 0,1°/Klick: Slave/Bus melden Soll oft eine Zehntelstufe hinter der UI (Rundung).
+     * on_target_deg würde taget_dg zurücksetzen → wirkt wie „Klick fehlt“, nächster Klick zeigt dann +0,2°.
+     * 1°/Klick (10 Zehntel): seltener sichtbar, daher wirkt delta=10 „stabiler“. */
+    const int bus_t = wrap_tenths_deg(
+        static_cast<int>(std::floor(static_cast<double>(disp) * 10.0 + 1e-4)));
+    {
+        int d = bus_t - s_encoder_tenths;
+        if (d > 1800) {
+            d -= 3600;
+        }
+        if (d < -1800) {
+            d += 3600;
+        }
+        constexpr uint32_t kBusTargetLagGraceMs = 900;
+        if ((uint32_t)(millis() - s_last_encoder_step_ms) < kBusTargetLagGraceMs && d == -1) {
+            return;
+        }
+    }
+    /* Gleiche Zehntel wie fmt_de/Encoder-Session — sonst zeigt taget_dg X, intern bleibt Y,
+     * nächster Encoder-Tick parst X und „verschluckt“ einen Schritt / doppelter Sprung. */
+    s_encoder_target_deg = disp;
+    s_encoder_tenths = wrap_tenths_deg(
+        static_cast<int>(std::floor(static_cast<double>(disp) * 10.0 + 1e-4)));
+
     lvgl_port_lock(-1);
     char buf[16];
-    const float disp = bus_to_display(bus_deg);
-    fmt_de(buf, sizeof(buf), disp);
-    if (objects.taget_dg) {
-        lv_textarea_set_text(objects.taget_dg, buf);
-    }
+    fmt_taget_from_display_deg(buf, sizeof(buf), disp);
+    taget_dg_set_display_text(buf);
     lvgl_port_unlock();
 }
 
@@ -347,10 +435,8 @@ static void on_arc(lv_event_t *e)
         int v = lv_arc_get_value(arc);
         float deg = static_cast<float>(v);
         char buf[16];
-        fmt_de(buf, sizeof(buf), deg);
-        if (objects.taget_dg) {
-            lv_textarea_set_text(objects.taget_dg, buf);
-        }
+        fmt_taget_from_display_deg(buf, sizeof(buf), deg);
+        taget_dg_set_display_text(buf);
     }
     if (c == LV_EVENT_RELEASED) {
         s_arc_dragging = false;
@@ -364,10 +450,8 @@ static void on_arc(lv_event_t *e)
         int target_v = lv_arc_get_value(arc);
         float target_deg = static_cast<float>(target_v);
         char buf[16];
-        fmt_de(buf, sizeof(buf), target_deg);
-        if (objects.taget_dg) {
-            lv_textarea_set_text(objects.taget_dg, buf);
-        }
+        fmt_taget_from_display_deg(buf, sizeof(buf), target_deg);
+        taget_dg_set_display_text(buf);
         /* Arc zeigt Ist (mitfahren), nicht auf dem Ziel stehen bleiben */
         if (objects.grad_acc) {
             s_arc_updating = true;
@@ -445,30 +529,29 @@ static bool encoder_apply_goto(float target_deg)
 
 extern "C" void rotor_app_encoder_step(int delta_tenths)
 {
-    if (!objects.grad_acc || delta_tenths == 0) {
+    /* Soll-Feld zählt — Arc (grad_acc) ist optional (ENCODER_MOVES_ARC). */
+    if (!objects.taget_dg || delta_tenths == 0) {
         return;
     }
 
     lvgl_port_lock(-1);
 
-    /* Session-Start: Zehntel aus taget_dg (Soll), sonst Arc (nur ganze Grade) */
+    /* Session-Start: Zehntel aus taget_dg; sonst letzter Soll (s_encoder_target_deg), nicht Arc — Arc ist nur 1°. */
     if (!s_encoder_adjusting) {
         int parsed = 0;
         if (parse_taget_text_to_tenths(&parsed)) {
             s_encoder_tenths = parsed;
         } else {
-            int av = lv_arc_get_value(objects.grad_acc);
-            if (av >= 360) {
-                av = 0;
-            }
-            s_encoder_tenths = wrap_tenths_deg(av * 10);
+            const int t = static_cast<int>(
+                std::floor(static_cast<double>(s_encoder_target_deg) * 10.0 + 1e-4));
+            s_encoder_tenths = wrap_tenths_deg(t);
         }
     }
     s_encoder_adjusting = true;
 
     s_encoder_tenths = wrap_tenths_deg(s_encoder_tenths + delta_tenths);
 
-    const float deg = s_encoder_tenths / 10.0f;
+    const float deg = static_cast<float>(s_encoder_tenths) / 10.0f;
     if (ENCODER_MOVES_ARC) {
         int v_arc = (s_encoder_tenths + 5) / 10;
         if (v_arc > 360) {
@@ -480,10 +563,8 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
     }
 
     char buf[16];
-    fmt_de(buf, sizeof(buf), deg);
-    if (objects.taget_dg) {
-        lv_textarea_set_text(objects.taget_dg, buf);
-    }
+    fmt_taget_from_wrapped_tenths(buf, sizeof(buf), s_encoder_tenths);
+    taget_dg_set_display_text(buf);
 
     lvgl_port_unlock();
 
@@ -493,6 +574,7 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
     s_encoder_goto_retry_pending = false;
     s_encoder_retry_deadline_ms = 0;
     s_encoder_idle_deadline_ms = millis() + ENCODER_SEND_IDLE_MS;
+    s_last_encoder_step_ms = millis();
 }
 
 extern "C" void rotor_app_antenna_offset_changed(void)
@@ -544,6 +626,7 @@ extern "C" void rotor_app_weather_ui_poll(void)
                 ang += 3600;
             }
             lv_obj_set_style_transform_angle(objects.pfeil_wind, static_cast<lv_coord_t>(ang), 0);
+            lv_obj_invalidate(objects.pfeil_wind);
         }
     }
     lvgl_port_unlock();
@@ -616,14 +699,12 @@ extern "C" void rotor_app_snap_target_to_deg(float bus_deg)
     const float disp = bus_to_display(bus_deg);
     s_encoder_target_deg = disp;
     s_encoder_tenths = wrap_tenths_deg(
-        static_cast<int>(std::trunc(static_cast<double>(disp) * 10.0)));
+        static_cast<int>(std::floor(static_cast<double>(disp) * 10.0 + 1e-4)));
 
     lvgl_port_lock(-1);
     char buf[16];
-    fmt_de(buf, sizeof(buf), disp);
-    if (objects.taget_dg) {
-        lv_textarea_set_text(objects.taget_dg, buf);
-    }
+    fmt_taget_from_display_deg(buf, sizeof(buf), disp);
+    taget_dg_set_display_text(buf);
     if (ENCODER_MOVES_ARC && objects.grad_acc) {
         s_arc_updating = true;
         lv_arc_set_value(objects.grad_acc, deg_to_arc_value(disp));

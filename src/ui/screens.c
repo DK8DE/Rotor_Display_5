@@ -85,7 +85,7 @@ void create_screen_main() {
                             // Label Gradzeichen A
                             lv_obj_t *obj = lv_label_create(parent_obj);
                             objects.label_gradzeichen_a = obj;
-                            lv_obj_set_pos(obj, 207, 177);
+                            lv_obj_set_pos(obj, 208, 177);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_label_set_text(obj, "°");
@@ -94,7 +94,7 @@ void create_screen_main() {
                             // Label Gradzeichen T
                             lv_obj_t *obj = lv_label_create(parent_obj);
                             objects.label_gradzeichen_t = obj;
-                            lv_obj_set_pos(obj, 201, 41);
+                            lv_obj_set_pos(obj, 202, 45);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_label_set_text(obj, "°");
@@ -105,7 +105,6 @@ void create_screen_main() {
                             objects.actual_dg = obj;
                             lv_obj_set_pos(obj, 54, 177);
                             lv_obj_set_size(obj, 150, 43);
-                            lv_textarea_set_accepted_chars(obj, "1234567890,.");
                             lv_textarea_set_max_length(obj, 6);
                             lv_textarea_set_text(obj, "360");
                             lv_textarea_set_one_line(obj, true);
@@ -119,7 +118,6 @@ void create_screen_main() {
                             objects.taget_dg = obj;
                             lv_obj_set_pos(obj, 48, 45);
                             lv_obj_set_size(obj, 151, 43);
-                            lv_textarea_set_accepted_chars(obj, "1234567890,.");
                             lv_textarea_set_max_length(obj, 6);
                             lv_textarea_set_text(obj, "360");
                             lv_textarea_set_placeholder_text(obj, "360");
@@ -145,7 +143,7 @@ void create_screen_main() {
                             // Meldetext
                             lv_obj_t *obj = lv_textarea_create(parent_obj);
                             objects.meldetext = obj;
-                            lv_obj_set_pos(obj, -8, 110);
+                            lv_obj_set_pos(obj, -7, 110);
                             lv_obj_set_size(obj, 272, 35);
                             lv_textarea_set_max_length(obj, 255);
                             lv_textarea_set_text(obj, "Meldungen");
@@ -354,11 +352,10 @@ void create_screen_main() {
                             // pfeilWind
                             lv_obj_t *obj = lv_img_create(parent_obj);
                             objects.pfeil_wind = obj;
-                            lv_obj_set_pos(obj, 97, 77);
+                            lv_obj_set_pos(obj, 79, 78);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_img_set_src(obj, "S:/img/ui_image_pfeil_wind.bin");
-                            /* Kein REAL: mit lv_img_set_angle (rotor_app) passt Objektgröße/Pivot nicht → Pfeil weg.
-                             * EEZ: Winkel 0°; Drehung nur per Code — entspricht LV_IMG_SIZE_MODE_VIRTUAL (Default). */
+                            lv_img_set_size_mode(obj, LV_IMG_SIZE_MODE_REAL);
                             lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICK_FOCUSABLE);
                         }
                         {

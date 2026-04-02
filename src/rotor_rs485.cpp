@@ -130,8 +130,11 @@ static bool s_align_target_after_pos_read = false;
 /** Nach SETREF/Homing: bei nächstem GETREF=referenziert einmal GETPOSDG anfordern */
 static bool s_request_pos_after_homing = false;
 
-static char s_rx[320];
+/** Lange Telegramme: ACK_GETACCBINS/GETCALBINS/… (viele Semikolon-getrennte Zahlen) — 320 war zu knapp */
+static char s_rx[1536];
 static size_t s_rx_len = 0;
+/** Puffer voll: bis zum nächsten „#“ verwerfen (sonst Mittendrin-Bytes → Müll im Log) */
+static bool s_rx_resync_until_hash = false;
 
 /** Zuletzt aus ACK_GETREF (für UI / Taster / LED) */
 static bool s_slave_referenced = false;
@@ -145,6 +148,11 @@ static uint32_t s_next_geterr_ms = 0;
 /** HW-Taster: Soll = Ist — SETPOSDG wiederholen bis ACK (Bus busy / kein ACK). */
 static bool s_hw_snap_retarget_active = false;
 static float s_hw_snap_retarget_deg = 0.0f;
+
+/** SETPOSDG vom Bus (USB/PC) geschnüffelt — kein s_poll_pos, aber Fahrt aktiv (HW-Stop nötig). */
+static bool s_remote_setpos_motion = false;
+static float s_remote_setpos_target_deg = 0.0f;
+static uint32_t s_remote_setpos_grace_end_ms = 0;
 
 /** SETPWM: zuletzt gesendeter Wert (Timeout-Retry) */
 static uint8_t s_setpwm_value = 0;
@@ -218,6 +226,8 @@ bool rotor_rs485_is_moving(void) { return s_poll_pos || s_poll_ref; }
 bool rotor_rs485_is_homing(void) { return s_poll_ref && !s_slave_referenced; }
 
 bool rotor_rs485_is_position_polling(void) { return s_poll_pos; }
+
+bool rotor_rs485_is_remote_setpos_motion(void) { return s_remote_setpos_motion; }
 
 float rotor_rs485_get_last_position_deg(void) { return s_last_pos_ui_deg; }
 
@@ -439,6 +449,8 @@ bool rotor_rs485_send_stop(void)
     s_pos_grace_end_ms = 0;
     s_poll_ref = false;
     s_request_pos_after_homing = false;
+    s_remote_setpos_motion = false;
+    s_remote_setpos_grace_end_ms = 0;
     send_request("STOP", "0", Pending::Stop);
     return true;
 }
@@ -722,6 +734,11 @@ static void dispatch_bus_command_to_slave(const char *line)
 {
     float deg = 0.0f;
     if (parse_setposdg_command_deg(line, &deg)) {
+        /* Lokal: goto_degrees() setzt s_poll_pos; PC-SETPOSDG kommt nur hierher (kein UART-Echo vom
+         * eigenen hw_send) — Flag für HW-STOP, solange kein Ankunft/STOP. */
+        s_remote_setpos_target_deg = deg;
+        s_remote_setpos_motion = true;
+        s_remote_setpos_grace_end_ms = 0;
         notify_target(deg);
     }
     sniff_setantoff_to_slave(line);
@@ -841,6 +858,8 @@ static bool parse_ack_stop(const char *line)
     if (s_pending == Pending::Stop) {
         clear_pending();
     }
+    s_remote_setpos_motion = false;
+    s_remote_setpos_grace_end_ms = 0;
     return true;
 }
 
@@ -1057,6 +1076,21 @@ static bool parse_ack_getposdg(const char *line)
         }
     }
 
+    /* PC-/USB-Fahrt: gleiche Toleranz wie lokales Polling, kein s_poll_pos */
+    if (s_remote_setpos_motion && !s_poll_pos) {
+        if (min_angle_diff(deg, s_remote_setpos_target_deg) <= ROTOR_POS_TOL_DEG) {
+            if (s_remote_setpos_grace_end_ms == 0) {
+                s_remote_setpos_grace_end_ms = millis() + ROTOR_POLL_POS_GRACE_MS;
+            }
+            if ((int32_t)(millis() - s_remote_setpos_grace_end_ms) >= 0) {
+                s_remote_setpos_motion = false;
+                s_remote_setpos_grace_end_ms = 0;
+            }
+        } else {
+            s_remote_setpos_grace_end_ms = 0;
+        }
+    }
+
     if (s_align_target_after_pos_read) {
         s_align_target_after_pos_read = false;
         s_target_deg = deg;
@@ -1196,6 +1230,8 @@ static bool parse_slave_err(const char *line)
         }
         s_poll_pos = false;
         s_pos_grace_end_ms = 0;
+        s_remote_setpos_motion = false;
+        s_remote_setpos_grace_end_ms = 0;
         return true;
     }
     return false;
@@ -1286,12 +1322,21 @@ static void process_complete_line(const char *line, size_t len)
 
 static void process_rx_byte(int c)
 {
+    if (s_rx_resync_until_hash) {
+        if (c == '#') {
+            s_rx_resync_until_hash = false;
+            s_rx_len = 0;
+            s_rx[s_rx_len++] = (char)c;
+        }
+        return;
+    }
     if (c == '#') {
         s_rx_len = 0;
     }
     if (s_rx_len < sizeof(s_rx) - 1) {
         s_rx[s_rx_len++] = (char)c;
     } else {
+        s_rx_resync_until_hash = true;
         s_rx_len = 0;
         return;
     }

@@ -6,8 +6,9 @@
 #include "lvgl_v8_port.h"
 
 #include <Button.h>
-#include "UltraEncoderPCNT.h"
+#include <ESP_Knob.h>
 #include <Signals.h>
+#include <freertos/portmacro.h>
 // WICHTIG: Lokalen UI-Wrapper verwenden (EEZ-Studio UI liegt unter "src/ui/")
 #include "ui.h"
 #include "serial_bridge.h"
@@ -85,43 +86,62 @@ using namespace esp_panel::drivers;
 using namespace esp_panel::board;
 
 /*if you use BOARD_VIEWE_UEDX46460015_MD50ET or UEDX48480021_MD80E/T,please open it*/
-/* A/B vertauscht ggü. Board-Silk — Drehrichtung wie gewünscht (Quadratur) */
+/* Board VIEWE: A/B getauscht + invertDirection() — Debounce in lib/ESP32_Knob/.../iot_knob.c */
+/* A/B wie am Encoder (ohne invertDirection — symmetrischer iot_knob-Pfad). Bei falscher Drehrichtung A/B tauschen oder invertDirection() setzen. */
 #define GPIO_NUM_KNOB_PIN_A     5
 #define GPIO_NUM_KNOB_PIN_B     6
 #define GPIO_BUTTON_PIN         GPIO_NUM_0
 
 /**
- * Skalierung PCNT-Schritt → Zehntelgrad für rotor_app_encoder_step(delta_tenths).
- * 10 = 1,0° pro Rastung; 1 = 0,1° pro Rastung (Fein).
- * Schritte kommen per UltraEncoderStepCallback direkt aus dem PCNT-Service-Task — kein 1-ms-Polling,
- * sonst können feine Schritte mit dem internen Flush (Watch/Timeout) kollidieren.
+ * Zehntelgrad pro Encoder-Raste (1 = 0,1°/Klick, 10 = 1°/Klick).
+ * Callbacks zählen nur ±1 Raste; Skalierung nur in encoder_process_pending.
+ * Bei 1: Bus-Soll kann kurz 0,1° hinter der UI liegen — rotor_app ignoriert solche Echo (siehe on_target_deg).
  */
 static constexpr int ENCODER_DELTA_TENTHS_PER_STEP = 1;
 
-/**
- * PCNT-Hardware-Glitchfilter (Nanosekunden): Pulse kürzer als dieser Wert zählen nicht.
- * Vorher 200 ns ≈ aus; mechanische Drehgeber profitieren oft von 2–10 µs.
- * Zu groß: sehr schnelles Drehen kann Schritte „verschlucken“. 0 = Filter aus.
- * Sinnvoll typ. 0,3–1 ms (UEPCNT_DEFAULT_GLITCH_NS in UltraEncoderPCNT.h).
- */
-static constexpr uint32_t ENCODER_GLITCH_NS = UEPCNT_DEFAULT_GLITCH_NS;
+static ESP_Knob *s_encoder_knob = nullptr;
 
-/**
- * Gegenrichtungs-Filter (UltraEncoderPCNT::setOppositeStepMinMs): nur Einzelschritt |delta|==1.
- * Kurze falsche Richtungsimpulse unterdrücken; 0 = aus. Tuning wie encoder_test (typ. 35–50 ms).
- */
-static constexpr uint32_t ENCODER_OPPOSITE_STEP_MIN_MS = 42u;
+/** esp_timer-Callback: kein LVGL/Serial — nur Pending, Abarbeitung in loop(). */
+static portMUX_TYPE s_encoder_pending_mux = portMUX_INITIALIZER_UNLOCKED;
+/** Summe noch abzuarbeitender Rasten (+ rechts, − links), nicht Zehntel. */
+static volatile int32_t s_encoder_pending_detents = 0;
 
-/** Quadratur-Encoder über PCNT (UltraEncoderPCNT). */
-static UltraEncoderPCNT *s_ultra_enc = nullptr;
-
-static void ultra_encoder_on_step(void *user, int32_t step_delta)
+/** Pro Knopf-Event genau ±1 Raste (Skalierung nur beim Abarbeiten). */
+static void encoder_knob_apply_detent(int sign)
 {
-    (void)user;
-    if (step_delta == 0 || ENCODER_DELTA_TENTHS_PER_STEP == 0) {
+    if (sign == 0 || ENCODER_DELTA_TENTHS_PER_STEP == 0) {
         return;
     }
-    rotor_app_encoder_step(static_cast<int>(step_delta) * ENCODER_DELTA_TENTHS_PER_STEP);
+    portENTER_CRITICAL(&s_encoder_pending_mux);
+    s_encoder_pending_detents += (sign > 0) ? 1 : -1;
+    portEXIT_CRITICAL(&s_encoder_pending_mux);
+}
+
+/** Im Arduino-loop(): einen Zehntelgrad-Schritt pro Iteration, bis Queue leer (max. pro Runde). */
+static void encoder_process_pending(void)
+{
+    constexpr int kMaxDrain = 128;
+    for (int n = 0; n < kMaxDrain; ++n) {
+        int32_t step = 0;
+        portENTER_CRITICAL(&s_encoder_pending_mux);
+        const int32_t p = s_encoder_pending_detents;
+        if (p == 0) {
+            portEXIT_CRITICAL(&s_encoder_pending_mux);
+            break;
+        }
+        step = (p > 0) ? 1 : -1;
+        s_encoder_pending_detents -= step;
+        portEXIT_CRITICAL(&s_encoder_pending_mux);
+        rotor_app_encoder_step(static_cast<int>(step) * ENCODER_DELTA_TENTHS_PER_STEP);
+    }
+}
+
+extern "C" int rotor_encoder_pending_detents(void)
+{
+    portENTER_CRITICAL(&s_encoder_pending_mux);
+    const int32_t p = s_encoder_pending_detents;
+    portEXIT_CRITICAL(&s_encoder_pending_mux);
+    return static_cast<int>(p);
 }
 
 static void SingleClickCb(void *button_handle, void *usr_data)
@@ -141,7 +161,8 @@ static void SingleClickCb(void *button_handle, void *usr_data)
         const float snap = rotor_rs485_get_last_position_deg();
         rotor_app_snap_target_to_deg(snap);
         rotor_rs485_hw_snap_retarget_request(snap);
-    } else if (rotor_rs485_is_moving()) {
+    } else if (rotor_rs485_is_moving() || rotor_rs485_is_remote_setpos_motion()) {
+        /* Homing/GET-Polling oder Fahrt nur vom PC (kein s_poll_pos → is_moving() wäre false) */
         rotor_rs485_send_stop();
     } else if (!rotor_rs485_is_referenced()) {
         rotor_rs485_send_setref_homing();
@@ -152,10 +173,12 @@ static void SingleClickCb(void *button_handle, void *usr_data)
 }
 static void DoubleClickCb(void *button_handle, void *usr_data)
 {
-    // Serial.println("Button Double Click");
+    (void)button_handle;
+    (void)usr_data;
 }
 static void LongPressStartCb(void *button_handle, void *usr_data) {
-    // Serial.println("Button Long Press Start");
+    (void)button_handle;
+    (void)usr_data;
     lvgl_port_lock(-1);
     LVGL_button_event((void*)(intptr_t)BUTTON_LONG_PRESS_START);
     lvgl_port_unlock();
@@ -203,22 +226,6 @@ void setup()
     Serial.println("Initializing LVGL");
     lvgl_port_init(board->getLCD(), board->getTouch());
 
-    /* UltraEncoderPCNT: HALF = 2 Flanken pro logischem Schritt (VIEWE-Knob); FULL würde nur jeden 2. Klick zählen */
-    Serial.println("Initialize UltraEncoderPCNT (A/B GPIO5/6, ULTRA_MODE_HALF)");
-    s_ultra_enc = new UltraEncoderPCNT(
-        GPIO_NUM_KNOB_PIN_A,
-        GPIO_NUM_KNOB_PIN_B,
-        ULTRA_MODE_HALF,
-        0,
-        1000);
-    if (!s_ultra_enc->begin(0, 500.0f, 0, ENCODER_GLITCH_NS)) {
-        Serial.println("UltraEncoderPCNT begin failed");
-    } else {
-        s_ultra_enc->setPositionSteps(0);
-        s_ultra_enc->setOppositeStepMinMs(ENCODER_OPPOSITE_STEP_MIN_MS);
-        s_ultra_enc->setStepCallback(ultra_encoder_on_step, nullptr);
-    }
-
     Serial.println("Initialize Button device");
     Button *btn = new Button(GPIO_BUTTON_PIN, false);
     btn->attachSingleClickEventCb(&SingleClickCb, NULL);
@@ -248,14 +255,31 @@ void setup()
     lv_timer_create(ui_tick_timer_cb, 10, NULL);
     /* Release the mutex */
     lvgl_port_unlock();
+
+    /* ESP32_Knob nach ui_init + rotor_app_init (objects.grad_acc). */
+    Serial.println("Initialize ESP32_Knob (A=GPIO5 B=GPIO6, Pending in loop)");
+    s_encoder_knob = new ESP_Knob(GPIO_NUM_KNOB_PIN_A, GPIO_NUM_KNOB_PIN_B);
+    s_encoder_knob->begin();
+    /* Schnelles Drehen: mehr virtuelle Rasten (Callback mehrfach) — wie PCNT mit dichter Schrittfolge */
+    s_encoder_knob->setAcceleration(80, 70 * 1000, 4);
+    s_encoder_knob->setEventUserDate(nullptr);
+    s_encoder_knob->attachRightEventCallback([](int, void *) {
+        encoder_knob_apply_detent(+1);
+    });
+    s_encoder_knob->attachLeftEventCallback([](int, void *) {
+        encoder_knob_apply_detent(-1);
+    });
+    s_encoder_knob->attachHighLimitEventCallback([](int, void *) {});
+    s_encoder_knob->attachLowLimitEventCallback([](int, void *) {});
+    s_encoder_knob->attachZeroEventCallback([](int, void *) {});
 }
 
 void loop()
 {
-    /* RS485-Empfang zuerst (USB spiegeln + Parser) — kann Pending löschen (ACK) */
+    /* RS485: USB spiegeln + Parser — zuerst, damit ACKs Pending lösen können */
     serial_bridge::poll();
-    /* Flash/LVGL nicht im Zeilenparser — direkt nach poll */
     rotor_rs485_idle_tasks();
+    encoder_process_pending();
     /* Encoder-SETPOS-Retry sofort nach frei werdendem Bus, bevor wieder GETPOSDG gestartet wird */
     rotor_app_loop();
     rotor_pwm_ui_loop();
@@ -263,6 +287,4 @@ void loop()
     rotor_app_weather_ui_poll();
     rotor_error_app_loop(millis());
     signals_ring_app_loop(millis());
-
-    rotor_app_loop();
 }
