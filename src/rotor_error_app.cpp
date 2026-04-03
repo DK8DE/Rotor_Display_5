@@ -1,5 +1,7 @@
 /**
  * Meldungen zu GETERR / async ERR; UI: meldetext, homing_led, Ring-Override in signals_ring_app.
+ * Fehler bleiben bis Neustart, Ausnahme: Verbindungstimeout (10) — wird bei wiederkehrender
+ * Slave-Antwort per Bus zurückgesetzt (kein Display-Neustart nötig).
  */
 
 #include "rotor_error_app.h"
@@ -19,6 +21,8 @@
 static int s_err_code = 0;
 static uint32_t s_led_blink_last_ms = 0;
 static bool s_led_blink_bright = true;
+/** Wechsel Fehlertext / „Bitte Neustart“ pro Sekunde */
+static uint32_t s_meldetext_last_alternate_sec = UINT32_MAX;
 
 static const char *message_for_code(int code)
 {
@@ -44,48 +48,87 @@ static const char *message_for_code(int code)
     }
 }
 
+static void apply_fault_meldetext_alternate(uint32_t now_ms)
+{
+    if (!objects.meldetext || s_err_code == 0) {
+        return;
+    }
+    /* Timeout: kein Wechsel mit „Bitte Neustart“ — Verbindung kann ohne Neustart wiederkehren */
+    if (s_err_code == 10) {
+        lv_textarea_set_text(objects.meldetext, "Verbindungstimeout");
+        return;
+    }
+    const uint32_t sec = now_ms / 1000u;
+    if (sec == s_meldetext_last_alternate_sec) {
+        return;
+    }
+    s_meldetext_last_alternate_sec = sec;
+    const bool show_err = (sec % 2u) == 0u;
+    if (show_err) {
+        const char *msg = message_for_code(s_err_code);
+        if (!msg) {
+            static char buf[40];
+            snprintf(buf, sizeof(buf), "Fehler %d", s_err_code);
+            lv_textarea_set_text(objects.meldetext, buf);
+        } else {
+            lv_textarea_set_text(objects.meldetext, msg);
+        }
+    } else {
+        lv_textarea_set_text(objects.meldetext, "Bitte Neustart");
+    }
+}
+
 static void apply_meldetext(void)
 {
     if (!objects.meldetext) {
         return;
     }
+    if (s_err_code != 0) {
+        s_meldetext_last_alternate_sec = UINT32_MAX;
+        apply_fault_meldetext_alternate(millis());
+        return;
+    }
     const char *msg = nullptr;
     if (rotor_rs485_is_homing()) {
         msg = "Referenziere";
-    } else if (s_err_code != 0) {
-        msg = message_for_code(s_err_code);
-        if (!msg) {
-            static char buf[40];
-            snprintf(buf, sizeof(buf), "Fehler %d", s_err_code);
-            lv_textarea_set_text(objects.meldetext, buf);
-            return;
-        }
+    } else if (!rotor_rs485_is_referenced()) {
+        msg = "Nicht referenziert";
     } else {
         msg = "Betriebsbereit";
     }
     lv_textarea_set_text(objects.meldetext, msg);
 }
 
+#ifndef ROTOR_HOMING_LED_GREEN
+#define ROTOR_HOMING_LED_GREEN 0x43b302
+#endif
+#ifndef ROTOR_HOMING_LED_RED
+#define ROTOR_HOMING_LED_RED 0xff0000
+#endif
+
 static void apply_homing_led_fault(uint32_t now_ms)
 {
     if (!objects.homing_led) {
         return;
     }
-    /* Referenzfahrt: normale Homing-Farbe (rot = nicht ref.) übernimmt on_ref_status */
+    /* Fehler: immer rot blinken (Homing/Referenz nicht möglich) */
+    if (s_err_code != 0) {
+        if ((uint32_t)(now_ms - s_led_blink_last_ms) < ROTOR_ERR_LED_BLINK_MS) {
+            return;
+        }
+        s_led_blink_last_ms = now_ms;
+        s_led_blink_bright = !s_led_blink_bright;
+        lv_led_set_color(objects.homing_led, lv_color_hex(0xff0000));
+        lv_led_set_brightness(objects.homing_led, s_led_blink_bright ? 255 : 80);
+        return;
+    }
     if (rotor_rs485_is_homing()) {
         return;
     }
-    if (s_err_code == 0) {
-        return;
-    }
-    if ((uint32_t)(now_ms - s_led_blink_last_ms) < ROTOR_ERR_LED_BLINK_MS) {
-        return;
-    }
-    s_led_blink_last_ms = now_ms;
-    s_led_blink_bright = !s_led_blink_bright;
-    lv_led_set_color(objects.homing_led, lv_color_hex(0xff0000));
-    /* lv_led: typisch 80 = dunkel, 255 = hell */
-    lv_led_set_brightness(objects.homing_led, s_led_blink_bright ? 255 : 80);
+    const bool ref = rotor_rs485_is_referenced();
+    lv_led_set_color(objects.homing_led,
+                     ref ? lv_color_hex(ROTOR_HOMING_LED_GREEN) : lv_color_hex(ROTOR_HOMING_LED_RED));
+    lv_led_set_brightness(objects.homing_led, 255);
 }
 
 void rotor_error_app_init(void)
@@ -93,6 +136,7 @@ void rotor_error_app_init(void)
     s_err_code = 0;
     s_led_blink_last_ms = 0;
     s_led_blink_bright = true;
+    s_meldetext_last_alternate_sec = UINT32_MAX;
     lvgl_port_lock(-1);
     apply_meldetext();
     lvgl_port_unlock();
@@ -103,7 +147,14 @@ void rotor_error_app_set_error_code(int code)
     if (code < 0) {
         code = 0;
     }
+    /* Latch: Fehler bleibt bis Neustart — Ausnahme Verbindungstimeout (10) per Bus quittierbar */
+    if (code == 0 && s_err_code != 0 && s_err_code != 10) {
+        return;
+    }
     s_err_code = code;
+    if (code != 0) {
+        s_meldetext_last_alternate_sec = UINT32_MAX;
+    }
     lvgl_port_lock(-1);
     apply_meldetext();
     lvgl_port_unlock();
@@ -116,30 +167,30 @@ int rotor_error_app_get_error_code(void)
 
 bool rotor_error_app_is_fault_ring_red(void)
 {
-    if (s_err_code == 0) {
-        return false;
-    }
-    if (rotor_rs485_is_homing()) {
-        return false;
-    }
-    return true;
+    return s_err_code != 0;
 }
 
-bool rotor_error_app_encoder_click_triggers_homing_only(void)
+bool rotor_error_app_is_fault_locked(void)
 {
-    /* Solange ein Fehlercode anliegt: Taster soll SETREF auslösen (auch wenn noch „referenziert“ angezeigt wird). */
-    return s_err_code != 0;
+    return s_err_code != 0 && s_err_code != 10;
 }
 
 void rotor_error_app_loop(uint32_t now_ms)
 {
     static bool last_homing = false;
+    /* Initial true: erzwingt Abgleich, falls Slave nach Boot referenziert meldet */
+    static bool last_referenced = true;
     const bool homing = rotor_rs485_is_homing();
+    const bool referenced = rotor_rs485_is_referenced();
 
     lvgl_port_lock(-1);
-    if (homing != last_homing) {
+    if (s_err_code == 0 && (homing != last_homing || referenced != last_referenced)) {
         last_homing = homing;
+        last_referenced = referenced;
         apply_meldetext();
+    }
+    if (s_err_code != 0) {
+        apply_fault_meldetext_alternate(now_ms);
     }
     apply_homing_led_fault(now_ms);
     lvgl_port_unlock();

@@ -131,6 +131,7 @@
 <li><a href="#protocol">1. RS485‑Protokoll (Format, Dezimal, Checksumme)</a></li>
 <li><a href="#encoders">2. Encoder‑Varianten (fest in der Firmware)</a></li>
 <li><a href="#cmd-table">3. RS485‑Befehle – Tabelle</a></li>
+<li><a href="#hw-controller-config">Hardwarecontroller Configuration (Display‑Controller)</a></li>
 <li><a href="#cmd-details">4. RS485‑Befehle – Erklärung &amp; Empfehlungen</a></li>
 <li><a href="#vars-table">5. INO‑Konfig‑Variablen – Tabelle</a></li>
 <li><a href="#vars-details">6. INO‑Variablen – Erklärung &amp; gute Werte</a></li>
@@ -872,6 +873,68 @@
 </table>
 <div class="toplink"><a href="#toc">↑ Inhaltsverzeichnis</a></div>
 </section>
+
+<section class="section" id="hw-controller-config">
+<h2>Hardwarecontroller Configuration</h2>
+<div class="danger"><b>Falsche Adresse = Antwort vom Rotor, nicht vom Controller:</b> Wenn Sie <code>DST = rotor_id</code> verwenden (z.&nbsp;B. <code>20</code>), geht das Telegramm an den <b>Antriebs‑Slave</b>. Der Rotor kennt <code>GETCONTID</code>, <code>GETCONANTNAME*</code> usw. nicht und antwortet mit <code>#&lt;RotorID&gt;:&lt;SRC&gt;:NAK_…:NOTIMPL:…$</code> — das ist <b>kein</b> Checksummenfehler auf dem Controller. Richtig ist <code>DST = master_id</code> aus der <code>config.json</code> des Display‑Controllers (typ. <code>2</code>), <b>nicht</b> die Rotor‑Slave‑ID.</div>
+<p>Diese Befehle richten sich <b>nicht</b> an den Rotor‑Slave (Antrieb), sondern an den <b>Display‑/Hardware‑Controller</b> (ESP32 mit UI). Zieladresse <code>DST</code> ist die im Gerät konfigurierte <b>Master‑ID</b> des Controllers (entspricht <code>master_id</code> in <code>config.json</code> auf der FFat‑Partition). <code>SRC</code> ist die ID des sendenden Clients (z.&nbsp;B. PC‑Software).</p>
+<p><b>Beispiel</b> (PC <code>SRC = 1</code>, Controller <code>master_id = 2</code>, GET‑Parameter <code>0</code>): Anfrage <code>#1:2:GETCONTID:0:3$</code> — Checksumme <code>3 = 1 + 2 + 0</code>. Antwort vom Controller (nicht vom Rotor): <code>#2:1:ACK_GETCONTID:&lt;Wert&gt;:…$</code>. <span class="muted">Falsch wäre <code>#1:20:GETCONTID:0:21$</code> — das trifft den Rotor mit ID&nbsp;20.</span></p>
+<p>Die gleichen Telegramme können über <b>USB‑Seriell</b> und über <b>RS485</b> eingehen; Antworten (<code>ACK_*</code>/<code>NAK_*</code>) gehen über <code>hw_send</code> ebenfalls auf den Bus <b>und</b> zum USB‑Monitor (Spiegelung). Checksumme <code>CS</code> wie gewohnt: <code>SRC + DST + letzter Zahlenwert in PARAMS</code> (siehe Abschnitt&nbsp;1).</p>
+<p>Schreibbefehle speichern in <code>config.json</code> (Slow/Fast‑PWM, IDs, Antennen‑Labels u.&nbsp;a.); die UI wird danach aktualisiert (u.&nbsp;a. Labels, RS485‑IDs, Slow/Fast‑<code>SETPWM</code> zum Rotor).</p>
+
+<table>
+<tr><th>Befehl</th><th>Antwort</th></tr>
+<tr>
+<td><code>GETCONRID</code> / <code>GETTCONRID</code> (Alias)</td>
+<td><code>ACK_GETCONRID</code> (Parameter = aktuelle <code>rotor_id</code>)</td>
+</tr>
+<tr>
+<td><code>SETCONRID</code></td>
+<td><code>ACK_SETCONRID</code> / <code>NAK_SETCONRID</code> (Rotor‑Slave‑ID 1…254)</td>
+</tr>
+<tr>
+<td><code>GETCONTID</code></td>
+<td><code>ACK_GETCONTID</code> (Parameter = <code>master_id</code> des Controllers)</td>
+</tr>
+<tr>
+<td><code>SETCONTID</code></td>
+<td><code>ACK_SETCONTID</code> / <code>NAK_SETCONTID</code> (1…254) — Ziel <code>DST = master_id</code> (unicast).</td>
+</tr>
+<tr>
+<td><code>SETCONIDF</code> oder <code>SETCONTID</code> mit <code>DST = 255</code> (Broadcast)</td>
+<td><code>ACK_SETCONIDF</code> bzw. <code>ACK_SETCONTID</code> / <code>NAK_SETCONTID</code> — setzt die <b>neue</b> Controller‑<code>master_id</code> in <code>config.json</code>, wenn die bisherige ID unbekannt ist. Checksumme: <code>CS = SRC + 255 + &lt;neue ID&gt;</code> (z.&nbsp;B. <code>#1:255:SETCONIDF:5:261$</code> mit <code>1+255+5=261</code>).</td>
+</tr>
+<tr>
+<td><code>GETCONANTNAME1</code> … <code>GETCONANTNAME3</code></td>
+<td><code>ACK_GETCONANTNAME1</code> … / <code>NAK_GETCONANTNAME*</code> — Antworttext enthält den Namen, für eine stabile CS wird <code>;0</code> angehängt (letzter Zahlenwert&nbsp;0).</td>
+</tr>
+<tr>
+<td><code>SETCONANTNAME1</code> … <code>SETCONANTNAME3</code></td>
+<td><code>ACK_SETCONANTNAME1</code> … / <code>NAK_SETCONANTNAME*</code> — ein <code>:</code> im Namen ist unzulässig (<code>NAK</code> mit Code&nbsp;1).</td>
+</tr>
+<tr>
+<td><code>GETCONSPWM</code> / <code>SETCONSPWM</code></td>
+<td><code>ACK_GETCONSPWM</code> / <code>ACK_SETCONSPWM</code> (bzw. <code>NAK_SETCONSPWM</code>) — Slow‑PWM in&nbsp;% (0…100), entspricht <code>slow_pwm</code> in der JSON.</td>
+</tr>
+<tr>
+<td><code>GETCONFPWM</code> / <code>SETCONFPWM</code></td>
+<td><code>ACK_GETCONFPWM</code> / <code>ACK_SETCONFPWM</code> (bzw. <code>NAK_SETCONFPWM</code>) — Fast‑PWM in&nbsp;% (0…100), entspricht <code>fast_pwm</code>.</td>
+</tr>
+<tr>
+<td><code>GETCONFRQ</code> / <code>SETCONFRQ</code></td>
+<td><code>ACK_GETCONFRQ</code> / <code>ACK_SETCONFRQ</code> — Touch‑Pieps‑Frequenz in&nbsp;Hz (200…4000), in <code>config.json</code> als <code>confrq</code>.</td>
+</tr>
+<tr>
+<td><code>GETLSL</code> / <code>SETLSL</code></td>
+<td><code>ACK_GETLSL</code> / <code>ACK_SETLSL</code> — Touch‑Pieps‑Lautstärke 0…50 (wie <code>Signals::tone</code>), in <code>config.json</code> als <code>lsl</code>.</td>
+</tr>
+</table>
+
+<div class="note"><b>NAK‑Codes (typisch):</b> <code>1</code> = ungültiger Wertebereich oder verbotenes Zeichen im Namen; <code>2</code> = Checksumme/Format passt nicht.</div>
+<p class="muted"><b>GET‑Anfragen</b> verwenden wie üblich z.&nbsp;B. <code>PARAMS = 0</code> (letzter Zahlenwert für die CS‑Bildung).</p>
+<div class="toplink"><a href="#toc">↑ Inhaltsverzeichnis</a></div>
+</section>
+
 <section class="section" id="cmd-details">
 <h2>4. RS485‑Befehle – Erklärung &amp; Empfehlungen</h2>
 <p>Hier ist jeder Befehl in einem eigenen Absatz beschrieben: Was er macht, wie man ihn benutzt, und welche Werte in der Praxis oft gut funktionieren.</p>

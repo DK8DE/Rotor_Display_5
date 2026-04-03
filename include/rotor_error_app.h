@@ -19,11 +19,11 @@ void rotor_error_app_loop(uint32_t now_ms);
 void rotor_error_app_set_error_code(int code);
 int rotor_error_app_get_error_code(void);
 
-/** NeoPixel: kompletter Ring rot (nur bei aktivem Fehler, nicht während Referenzfahrt) */
+/** NeoPixel: kompletter Ring rot bei aktivem Fehler */
 bool rotor_error_app_is_fault_ring_red(void);
 
-/** Encoder-Taster: true, wenn Fehler aktiv → SingleClick soll zuerst SETREF (Homing) senden */
-bool rotor_error_app_encoder_click_triggers_homing_only(void);
+/** True bei hartem Fehler (≠10) — kein Homing/Tasten. Code 10 (Verbindungstimeout) ist quittierbar. */
+bool rotor_error_app_is_fault_locked(void);
 
 #ifdef __cplusplus
 }

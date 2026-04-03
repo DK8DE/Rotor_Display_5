@@ -17,6 +17,7 @@
 #include "rotor_error_app.h"
 #include "rotor_rs485.h"
 #include "signals_ring_app.h"
+#include "touch_feedback.h"
 
 /** Signals → ATtiny: nur TX, wie im SignalsDemo (Serial1). */
 static constexpr int8_t SIGNALS_TX_PIN = 40;
@@ -120,6 +121,12 @@ static void encoder_knob_apply_detent(int sign)
 /** Im Arduino-loop(): einen Zehntelgrad-Schritt pro Iteration, bis Queue leer (max. pro Runde). */
 static void encoder_process_pending(void)
 {
+    if (rotor_error_app_is_fault_locked()) {
+        portENTER_CRITICAL(&s_encoder_pending_mux);
+        s_encoder_pending_detents = 0;
+        portEXIT_CRITICAL(&s_encoder_pending_mux);
+        return;
+    }
     constexpr int kMaxDrain = 128;
     for (int n = 0; n < kMaxDrain; ++n) {
         int32_t step = 0;
@@ -148,9 +155,8 @@ static void SingleClickCb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
-    /* Fehler aktiv (GETERR/async ERR): immer SETREF (Homing + Quittierung) — vor Snap/Stop/„nur wenn nicht ref.“ */
-    if (rotor_error_app_encoder_click_triggers_homing_only()) {
-        rotor_rs485_send_setref_homing();
+    /* Fehler: kein Homing/Bus — nur UI-Feedback */
+    if (rotor_error_app_is_fault_locked()) {
         lvgl_port_lock(-1);
         LVGL_button_event((void *)(intptr_t)BUTTON_SINGLE_CLICK);
         lvgl_port_unlock();
@@ -191,6 +197,7 @@ void setup()
 
     Serial.println("Signals boot (TX GPIO40) …");
     signals_play_boot_welcome();
+    touch_feedback_set_signals(&g_signals);
     Serial.println("Initializing board");
     /* FFat (partitions.csv: ffat) — muss vor LVGL, damit S:/img/… über LV_FS_STDIO funktioniert */
     if (!FFat.begin(true, "/ffat", 10, "ffat")) {

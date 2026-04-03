@@ -5,7 +5,13 @@
  *
  * Bus-Regel: Pro Anfrage ein ausstehendes Telegramm; nächste Anfrage erst nach ACK (oder Timeout).
  * SETASELECT (DST 255): kein Pending/ACK — sofort senden.
+ * SETCONIDF / SETCONTID (DST 255): neue Controller-master_id → config.json + ACK_SETCONIDF bzw. ACK_SETCONTID.
  * GETANEMO/GETTEMPA/GETWINDDIR: nur Stillstand, ohne Fremd-PC; ACKs auch bei PC-Mitlesen.
+ *
+ * Verbindung: Fehler 10 (Verbindungstimeout), wenn länger kein Telegramm vom Slave (SRC=Rotor-ID)
+ * oder vor erster Antwort nur Timeouts — PC- oder Controller-Abfragen zählen (ROTOR_CONN_LOST_TIMEOUT_MS).
+ * Fehler 10: GETREF-Recovery bis Antwort; bei erstem Slave-Telegramm quittiert (kein Display-Neustart).
+ * Boot: zuerst 3× TEST:0 (Ping, je ROTOR_RS485_ACK_TIMEOUT_MS); ohne ACK_TEST/NAK_TEST → sofort Fehler 10.
  */
 
 #include "rotor_rs485.h"
@@ -18,6 +24,7 @@
 #include <string.h>
 
 #include "pwm_config.h"
+#include "rotor_app.h"
 #include "rotor_error_app.h"
 #include "serial_bridge.h"
 
@@ -67,6 +74,12 @@ extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3);
 #define ROTOR_PC_FOREIGN_SILENCE_MS 3000u
 #endif
 
+/** Referenz + Betrieb: keine Antwort vom Rotor (Slave) seit so lang → Fehler 10 Verbindungstimeout
+ * (gilt auch wenn nur der PC fragt und der Controller selbst nicht sendet). */
+#ifndef ROTOR_CONN_LOST_TIMEOUT_MS
+#define ROTOR_CONN_LOST_TIMEOUT_MS 5000u
+#endif
+
 /** Abstand zwischen GETANEMO / GETTEMPA / GETWINDDIR (zyklisch); jede Größe alle 3 s */
 #ifndef ROTOR_WEATHER_STAGGER_MS
 #define ROTOR_WEATHER_STAGGER_MS 1000u
@@ -84,9 +97,13 @@ enum class Pending : uint8_t {
     GetAntOff1,
     GetAntOff2,
     GetAntOff3,
+    GetAngle1,
+    GetAngle2,
+    GetAngle3,
     GetAnemo,
     GetTempA,
-    GetWindDir
+    GetWindDir,
+    Test
 };
 
 static uint8_t s_master_id = ROTOR_RS485_MASTER_ID;
@@ -96,9 +113,10 @@ static rotor_rs485_ref_cb_t s_ref_cb = nullptr;
 static rotor_rs485_pos_cb_t s_pos_cb = nullptr;
 static rotor_rs485_target_cb_t s_target_cb = nullptr;
 
-/** Nicht im UART-Parser: pwm_config_save + rotor_app_antenna_offset_changed */
-static bool s_pending_pwm_save = false;
+/** Nicht im UART-Parser: rotor_app_antenna_offset_changed (Flash nicht im Parser) */
 static bool s_pending_antenna_offset_notify = false;
+/** SET* config: pwm_config_save + UI (LVGL) in rotor_rs485_idle_tasks */
+static bool s_pending_config_changed_from_bus = false;
 
 /** ACK_GETANEMO / ACK_GETTEMPA / ACK_WINDDIR (Anzeige in loop(), nicht im Parser) */
 static float s_last_wind_kmh = 0.0f;
@@ -160,21 +178,56 @@ static uint8_t s_setpwm_value = 0;
 /** Nach Boot: GETANTOFF1→2→3 (Versätze vom Rotor); phase 0 = GET1 noch nicht gesendet */
 static bool s_antenna_boot_pending = true;
 static uint8_t s_antenna_boot_phase = 0;
+/** Nach erfolgreicher GETANTOFF-Kette: GETANGLE1→2→3 (Öffnungswinkel); phase 0 = inaktiv */
+static bool s_angle_boot_pending = false;
+static uint8_t s_angle_boot_phase = 0;
 
 /** Zuletzt #FremdMaster:RotorID:… gesehen (Millis); 0 = noch keiner */
 static uint32_t s_last_foreign_master_to_slave_ms = 0;
+
+/** Zuletzt ein gültiges Telegramm mit SRC = Slave-ID (ACK/NAK/ERR …) — Verbindungs-Watchdog */
+static uint32_t s_last_slave_rx_ms = 0;
+static bool s_have_slave_rx_ever = false;
+/** Start Uhr „keine Slave-Antwort“: erster GETREF (Boot) oder erster Befehl Richtung Slave (PC) */
+static uint32_t s_conn_watch_start_ms = 0;
+/** GETREF-Recovery nach Fehler 10 */
+static uint32_t s_next_conn_recovery_getref_ms = 0;
 
 /** Nächster Wetter-GET (nur ohne PC, Stillstand); 0=ANEMO, 1=TEMPA, 2=WINDDIR */
 static uint32_t s_next_weather_ms = 0;
 static uint8_t s_weather_phase = 0;
 
+/** Direkt nach Einschalten: 3× TEST (Ping); ohne ACK nach 3 Versuchen → Fehler 10 */
+static bool s_boot_test_done = false;
+static uint8_t s_boot_test_timeout_count = 0;
+
+static void abort_angle_boot(void)
+{
+    s_angle_boot_pending = false;
+    s_angle_boot_phase = 0;
+}
+
 static void abort_antenna_boot(void)
 {
     s_antenna_boot_pending = false;
     s_antenna_boot_phase = 0;
+    abort_angle_boot();
 }
 
 static void notify_target(float deg);
+
+/** Bei Fehler stoppt der Slave — kein weiteres GETPOSDG-Polling / keine ausstehende Pos-Sync bis Recovery */
+static void stop_fault_motion_polling(void)
+{
+    s_poll_pos = false;
+    s_pos_grace_end_ms = 0;
+    s_align_target_after_pos_read = false;
+    s_remote_setpos_motion = false;
+    s_remote_setpos_grace_end_ms = 0;
+    s_hw_snap_retarget_active = false;
+    s_poll_ref = false;
+    s_request_pos_after_homing = false;
+}
 
 void rotor_rs485_set_master_id(uint8_t id) { s_master_id = id; }
 void rotor_rs485_set_slave_id(uint8_t id) { s_slave_id = id; }
@@ -185,13 +238,13 @@ void rotor_rs485_set_target_callback(rotor_rs485_target_cb_t cb) { s_target_cb =
 
 void rotor_rs485_idle_tasks(void)
 {
-    if (s_pending_pwm_save) {
-        s_pending_pwm_save = false;
-        pwm_config_save();
-    }
     if (s_pending_antenna_offset_notify) {
         s_pending_antenna_offset_notify = false;
         rotor_app_antenna_offset_changed();
+    }
+    if (s_pending_config_changed_from_bus) {
+        s_pending_config_changed_from_bus = false;
+        rotor_app_config_changed_from_bus();
     }
 }
 
@@ -382,8 +435,18 @@ static void format_cs_python(char *out, size_t out_sz, float cs)
     snprintf(out, out_sz, "%s", tmp);
 }
 
+/** Bus senden: bei hartem Fehler gesperrt — Fehler 10 (Timeout) erlaubt GETREF-Recovery */
+static bool bus_send_allowed_by_fault(void)
+{
+    const int e = rotor_error_app_get_error_code();
+    return e == 0 || e == 10;
+}
+
 static void send_line_to(uint8_t dst, const char *cmd, const char *params_str)
 {
+    if (!bus_send_allowed_by_fault()) {
+        return;
+    }
     float last = last_number_in_params_python(params_str);
     float cs_val = (float)s_master_id + (float)dst + last;
     char cs[32];
@@ -400,6 +463,9 @@ static void send_line(const char *cmd, const char *params_str)
 
 static void send_request(const char *cmd, const char *params_str, Pending p)
 {
+    if (!bus_send_allowed_by_fault()) {
+        return;
+    }
     send_line(cmd, params_str);
     set_pending(p);
 }
@@ -563,6 +629,10 @@ static void notify_ref(bool ref_ok)
 
 static void notify_pos(float deg)
 {
+    /* Ohne Referenz liefert GETPOSDG oft 0° o. Ä. — PC-Polling würde Ist-Anzeige/Arc falsch treiben. */
+    if (!s_slave_referenced) {
+        return;
+    }
     s_last_pos_ui_deg = deg;
     if (s_pos_cb) {
         s_pos_cb(deg);
@@ -676,6 +746,28 @@ static bool parse_setaselect_antenna_1_to_3(const char *line, unsigned *out_v)
     return true;
 }
 
+/** Erster Parameter nach :SETREF: (Homing starten bei ≠ 0) — Befehlszeile Richtung Slave */
+static bool parse_setref_command_param(const char *line, int *out_v)
+{
+    const char *p = strstr(line, ":SETREF:");
+    if (!p) {
+        return false;
+    }
+    p += strlen(":SETREF:");
+    char tmp[16];
+    size_t n = 0;
+    while (*p && *p != ':' && *p != '$' && n + 1 < sizeof(tmp)) {
+        tmp[n++] = (*p == ',') ? '.' : *p;
+        p++;
+    }
+    tmp[n] = '\0';
+    if (n == 0) {
+        return false;
+    }
+    *out_v = (int)(strtof(tmp, nullptr) + 0.5f);
+    return true;
+}
+
 /** Erster Parameter nach :SETPOSDG: (Grad, Komma erlaubt) — nur echte Befehlszeile, nicht ACK_SETPOSDG */
 static bool parse_setposdg_command_deg(const char *line, float *out_deg)
 {
@@ -724,14 +816,391 @@ static void sniff_setantoff_to_slave(const char *line)
         tmp[n] = '\0';
         const float v = normalize_deg_0_360(strtof(tmp, nullptr));
         pwm_config_set_antoff_deg(tags[i].idx, v);
-        s_pending_pwm_save = true;
         s_pending_antenna_offset_notify = true;
         return;
     }
 }
 
-static void dispatch_bus_command_to_slave(const char *line)
+/** Fremd-Master: SETANGLEn an Slave — Öffnungswinkel übernehmen */
+static void sniff_setangle_to_slave(const char *line)
 {
+    static const struct {
+        const char *tag;
+        int idx;
+    } tags[] = {
+        {":SETANGLE1:", 1},
+        {":SETANGLE2:", 2},
+        {":SETANGLE3:", 3},
+    };
+    for (size_t i = 0; i < 3; i++) {
+        const char *p = strstr(line, tags[i].tag);
+        if (!p) {
+            continue;
+        }
+        p += strlen(tags[i].tag);
+        char tmp[32];
+        size_t n = 0;
+        while (*p && *p != ':' && *p != '$' && n + 1 < sizeof(tmp)) {
+            tmp[n++] = (*p == ',') ? '.' : *p;
+            p++;
+        }
+        tmp[n] = '\0';
+        const float v = strtof(tmp, nullptr);
+        if (v == v) {
+            pwm_config_set_opening_deg(tags[i].idx, v);
+        }
+        return;
+    }
+}
+
+/** PARAMS und CS zwischen :TAG: … :CS$ (wie andere Buszeilen) */
+static bool extract_tag_params_cs(const char *line, const char *tag, char *param_out, size_t po_sz, float *cs_out)
+{
+    const char *cmd_start = strstr(line, tag);
+    if (!cmd_start) {
+        return false;
+    }
+    const char *params_start = cmd_start + strlen(tag);
+    const char *dollar = strchr(line, '$');
+    if (!dollar || params_start >= dollar) {
+        return false;
+    }
+    const char *last_colon = dollar;
+    while (last_colon > params_start && last_colon[-1] != ':') {
+        last_colon--;
+    }
+    if (last_colon <= params_start) {
+        return false;
+    }
+    /* last_colon zeigt auf das erste Zeichen von CS; davor steht ':' zwischen PARAMS und CS */
+    const char *colon_before_cs = last_colon - 1;
+    if (colon_before_cs < params_start || *colon_before_cs != ':') {
+        return false;
+    }
+    size_t plen = (size_t)(colon_before_cs - params_start);
+    if (plen >= po_sz) {
+        plen = po_sz - 1;
+    }
+    memcpy(param_out, params_start, plen);
+    param_out[plen] = '\0';
+    char csbuf[32];
+    size_t i = 0;
+    const char *q = last_colon;
+    while (q < dollar && i + 1 < sizeof(csbuf)) {
+        csbuf[i++] = (*q == ',') ? '.' : *q;
+        q++;
+    }
+    csbuf[i] = '\0';
+    *cs_out = strtof(csbuf, nullptr);
+    return true;
+}
+
+static bool config_cs_ok(unsigned src, unsigned dst, const char *params, float cs_rx)
+{
+    const float expected =
+        (float)src + (float)dst + last_number_in_params_python(params);
+    return fabsf(cs_rx - expected) < 0.12f;
+}
+
+static void config_reply_ack_u8(uint8_t to_src, const char *ack, uint8_t v)
+{
+    char p[8];
+    snprintf(p, sizeof(p), "%u", (unsigned)v);
+    send_line_to(to_src, ack, p);
+}
+
+static void config_reply_ack_u16(uint8_t to_src, const char *ack, uint16_t v)
+{
+    char p[8];
+    snprintf(p, sizeof(p), "%u", (unsigned)v);
+    send_line_to(to_src, ack, p);
+}
+
+/** Letzte Zahl in PARAMS fest 0 (CS trotz Ziffern im Namen) */
+static void config_reply_ack_label(uint8_t to_src, const char *ack, const char *label)
+{
+    char p[56];
+    snprintf(p, sizeof(p), "%s;0", label ? label : "");
+    send_line_to(to_src, ack, p);
+}
+
+static void config_reply_nak(uint8_t to_src, const char *nak, int code)
+{
+    char p[8];
+    snprintf(p, sizeof(p), "%d", code);
+    send_line_to(to_src, nak, p);
+}
+
+/**
+ * Broadcast DST=255: neue Controller-Master-ID setzen, wenn die bisherige ID unbekannt ist.
+ * Tags: SETCONIDF (vorgesehen für Erstkonfiguration) oder SETCONTID (gleiche Semantik).
+ * CS = SRC + 255 + letzte Zahl in PARAMS.
+ */
+static void handle_broadcast_set_controller_master_id(const char *line, unsigned src)
+{
+    const char *tag = nullptr;
+    const char *ack = "ACK_SETCONTID";
+    if (strstr(line, ":SETCONIDF:")) {
+        tag = ":SETCONIDF:";
+        ack = "ACK_SETCONIDF";
+    } else if (strstr(line, ":SETCONTID:")) {
+        tag = ":SETCONTID:";
+    } else {
+        return;
+    }
+    char par[128];
+    float cs = 0.0f;
+    if (!extract_tag_params_cs(line, tag, par, sizeof(par), &cs) ||
+        !config_cs_ok(src, ROTOR_RS485_BROADCAST_ID, par, cs)) {
+        config_reply_nak(src, "NAK_SETCONTID", 2);
+        return;
+    }
+    unsigned v = 0;
+    if (sscanf(par, "%u", &v) != 1 || v < 1u || v > 254u) {
+        config_reply_nak(src, "NAK_SETCONTID", 1);
+        return;
+    }
+    pwm_config_set_master_id((uint8_t)v);
+    pwm_config_save();
+    rotor_rs485_set_master_id((uint8_t)v);
+    s_pending_config_changed_from_bus = true;
+    char p[8];
+    snprintf(p, sizeof(p), "%u", (unsigned)v);
+    send_line_to(src, ack, p);
+}
+
+/**
+ * Konfiguration wie config.json: Ziel DST = master_id (Controller).
+ * SET → Speichern + UI-Update deferred; GET → sofort ACK.
+ */
+static bool handle_local_config_command(const char *line, unsigned src, unsigned dst)
+{
+    if (dst != (unsigned)s_master_id) {
+        return false;
+    }
+    char par[128];
+    float cs = 0.0f;
+
+#define CFG_TRY_TAG(t) \
+    extract_tag_params_cs(line, (t), par, sizeof(par), &cs) && config_cs_ok(src, dst, par, cs)
+
+    if (strstr(line, ":GETCONRID:") || strstr(line, ":GETTCONRID:")) {
+        const char *tag = strstr(line, ":GETTCONRID:") ? ":GETTCONRID:" : ":GETCONRID:";
+        if (!extract_tag_params_cs(line, tag, par, sizeof(par), &cs) || !config_cs_ok(src, dst, par, cs)) {
+            config_reply_nak(src, "NAK_GETCONRID", 2);
+            return true;
+        }
+        config_reply_ack_u8(src, "ACK_GETCONRID", pwm_config_get_rotor_id());
+        return true;
+    }
+
+    if (strstr(line, ":SETCONRID:")) {
+        if (!CFG_TRY_TAG(":SETCONRID:")) {
+            config_reply_nak(src, "NAK_SETCONRID", 2);
+            return true;
+        }
+        unsigned v = 0;
+        if (sscanf(par, "%u", &v) != 1 || v < 1u || v > 254u) {
+            config_reply_nak(src, "NAK_SETCONRID", 1);
+            return true;
+        }
+        pwm_config_set_rotor_id((uint8_t)v);
+        pwm_config_save();
+        s_pending_config_changed_from_bus = true;
+        config_reply_ack_u8(src, "ACK_SETCONRID", (uint8_t)v);
+        return true;
+    }
+
+    if (strstr(line, ":GETCONTID:")) {
+        if (!CFG_TRY_TAG(":GETCONTID:")) {
+            config_reply_nak(src, "NAK_GETCONTID", 2);
+            return true;
+        }
+        config_reply_ack_u8(src, "ACK_GETCONTID", pwm_config_get_master_id());
+        return true;
+    }
+
+    if (strstr(line, ":SETCONTID:")) {
+        if (!CFG_TRY_TAG(":SETCONTID:")) {
+            config_reply_nak(src, "NAK_SETCONTID", 2);
+            return true;
+        }
+        unsigned v = 0;
+        if (sscanf(par, "%u", &v) != 1 || v < 1u || v > 254u) {
+            config_reply_nak(src, "NAK_SETCONTID", 1);
+            return true;
+        }
+        pwm_config_set_master_id((uint8_t)v);
+        pwm_config_save();
+        s_pending_config_changed_from_bus = true;
+        config_reply_ack_u8(src, "ACK_SETCONTID", (uint8_t)v);
+        return true;
+    }
+
+    if (strstr(line, ":GETCONSPWM:")) {
+        if (!CFG_TRY_TAG(":GETCONSPWM:")) {
+            config_reply_nak(src, "NAK_GETCONSPWM", 2);
+            return true;
+        }
+        config_reply_ack_u8(src, "ACK_GETCONSPWM", pwm_config_get_slow());
+        return true;
+    }
+
+    if (strstr(line, ":SETCONSPWM:")) {
+        if (!CFG_TRY_TAG(":SETCONSPWM:")) {
+            config_reply_nak(src, "NAK_SETCONSPWM", 2);
+            return true;
+        }
+        unsigned v = 0;
+        if (sscanf(par, "%u", &v) != 1 || v > 100u) {
+            config_reply_nak(src, "NAK_SETCONSPWM", 1);
+            return true;
+        }
+        pwm_config_set_slow((uint8_t)v);
+        pwm_config_save();
+        s_pending_config_changed_from_bus = true;
+        config_reply_ack_u8(src, "ACK_SETCONSPWM", (uint8_t)v);
+        return true;
+    }
+
+    if (strstr(line, ":GETCONFPWM:")) {
+        if (!CFG_TRY_TAG(":GETCONFPWM:")) {
+            config_reply_nak(src, "NAK_GETCONFPWM", 2);
+            return true;
+        }
+        config_reply_ack_u8(src, "ACK_GETCONFPWM", pwm_config_get_fast());
+        return true;
+    }
+
+    if (strstr(line, ":SETCONFPWM:")) {
+        if (!CFG_TRY_TAG(":SETCONFPWM:")) {
+            config_reply_nak(src, "NAK_SETCONFPWM", 2);
+            return true;
+        }
+        unsigned v = 0;
+        if (sscanf(par, "%u", &v) != 1 || v > 100u) {
+            config_reply_nak(src, "NAK_SETCONFPWM", 1);
+            return true;
+        }
+        pwm_config_set_fast((uint8_t)v);
+        pwm_config_save();
+        s_pending_config_changed_from_bus = true;
+        config_reply_ack_u8(src, "ACK_SETCONFPWM", (uint8_t)v);
+        return true;
+    }
+
+    if (strstr(line, ":GETCONFRQ:")) {
+        if (!CFG_TRY_TAG(":GETCONFRQ:")) {
+            config_reply_nak(src, "NAK_GETCONFRQ", 2);
+            return true;
+        }
+        config_reply_ack_u16(src, "ACK_GETCONFRQ", pwm_config_get_touch_beep_freq_hz());
+        return true;
+    }
+
+    if (strstr(line, ":SETCONFRQ:")) {
+        if (!CFG_TRY_TAG(":SETCONFRQ:")) {
+            config_reply_nak(src, "NAK_SETCONFRQ", 2);
+            return true;
+        }
+        unsigned v = 0;
+        if (sscanf(par, "%u", &v) != 1 || v < 200u || v > 4000u) {
+            config_reply_nak(src, "NAK_SETCONFRQ", 1);
+            return true;
+        }
+        pwm_config_set_touch_beep_freq_hz((uint16_t)v);
+        pwm_config_save();
+        config_reply_ack_u16(src, "ACK_SETCONFRQ", pwm_config_get_touch_beep_freq_hz());
+        return true;
+    }
+
+    if (strstr(line, ":GETLSL:")) {
+        if (!CFG_TRY_TAG(":GETLSL:")) {
+            config_reply_nak(src, "NAK_GETLSL", 2);
+            return true;
+        }
+        config_reply_ack_u8(src, "ACK_GETLSL", pwm_config_get_touch_beep_vol());
+        return true;
+    }
+
+    if (strstr(line, ":SETLSL:")) {
+        if (!CFG_TRY_TAG(":SETLSL:")) {
+            config_reply_nak(src, "NAK_SETLSL", 2);
+            return true;
+        }
+        unsigned v = 0;
+        if (sscanf(par, "%u", &v) != 1 || v > 50u) {
+            config_reply_nak(src, "NAK_SETLSL", 1);
+            return true;
+        }
+        pwm_config_set_touch_beep_vol((uint8_t)v);
+        pwm_config_save();
+        config_reply_ack_u8(src, "ACK_SETLSL", pwm_config_get_touch_beep_vol());
+        return true;
+    }
+
+    static const struct {
+        const char *get_tag;
+        const char *set_tag;
+        const char *ack_get;
+        const char *nak_get;
+        const char *ack_set;
+        const char *nak_set;
+        int idx;
+    } ant[] = {
+        {":GETCONANTNAME1:", ":SETCONANTNAME1:", "ACK_GETCONANTNAME1", "NAK_GETCONANTNAME1",
+         "ACK_SETCONANTNAME1", "NAK_SETCONANTNAME1", 1},
+        {":GETCONANTNAME2:", ":SETCONANTNAME2:", "ACK_GETCONANTNAME2", "NAK_GETCONANTNAME2",
+         "ACK_SETCONANTNAME2", "NAK_SETCONANTNAME2", 2},
+        {":GETCONANTNAME3:", ":SETCONANTNAME3:", "ACK_GETCONANTNAME3", "NAK_GETCONANTNAME3",
+         "ACK_SETCONANTNAME3", "NAK_SETCONANTNAME3", 3},
+    };
+
+    for (size_t i = 0; i < 3; i++) {
+        if (strstr(line, ant[i].get_tag)) {
+            if (!CFG_TRY_TAG(ant[i].get_tag)) {
+                config_reply_nak(src, ant[i].nak_get, 2);
+                return true;
+            }
+            config_reply_ack_label(src, ant[i].ack_get, pwm_config_get_antenna_label(ant[i].idx));
+            return true;
+        }
+    }
+    for (size_t i = 0; i < 3; i++) {
+        if (strstr(line, ant[i].set_tag)) {
+            if (!CFG_TRY_TAG(ant[i].set_tag)) {
+                config_reply_nak(src, ant[i].nak_set, 2);
+                return true;
+            }
+            if (strchr(par, ':')) {
+                config_reply_nak(src, ant[i].nak_set, 1);
+                return true;
+            }
+            pwm_config_set_antenna_label(ant[i].idx, par);
+            pwm_config_save();
+            s_pending_config_changed_from_bus = true;
+            config_reply_ack_label(src, ant[i].ack_set, pwm_config_get_antenna_label(ant[i].idx));
+            return true;
+        }
+    }
+
+#undef CFG_TRY_TAG
+    return false;
+}
+
+static void dispatch_bus_command_to_slave(const char *line, unsigned src)
+{
+    /* PC-Client (anderer Master): SETREF:1 → gleiche Homing-Flags wie rotor_rs485_send_setref_homing()
+     * (LED, Meldetext „Referenziere“, NeoPixel-Lauflicht, GETREF bis referenziert). */
+    if (src != (unsigned)s_master_id) {
+        int ref_cmd = 0;
+        if (parse_setref_command_param(line, &ref_cmd) && ref_cmd != 0) {
+            s_poll_ref = true;
+            s_request_pos_after_homing = true;
+            s_next_ref_poll_ms = millis() + ROTOR_POLL_GAP_MS;
+        }
+    }
+
     float deg = 0.0f;
     if (parse_setposdg_command_deg(line, &deg)) {
         /* Lokal: goto_degrees() setzt s_poll_pos; PC-SETPOSDG kommt nur hierher (kein UART-Echo vom
@@ -742,6 +1211,7 @@ static void dispatch_bus_command_to_slave(const char *line)
         notify_target(deg);
     }
     sniff_setantoff_to_slave(line);
+    sniff_setangle_to_slave(line);
 }
 
 static void on_ack_timeout()
@@ -758,7 +1228,14 @@ static void on_ack_timeout()
         case Pending::GetAnemo:
         case Pending::GetTempA:
         case Pending::GetWindDir:
+        case Pending::GetAngle1:
+        case Pending::GetAngle2:
+        case Pending::GetAngle3:
             clear_pending();
+            return;
+        case Pending::Test:
+            clear_pending();
+            s_boot_test_done = true;
             return;
         default:
             break;
@@ -802,6 +1279,15 @@ static void on_ack_timeout()
     case Pending::GetAntOff3:
         send_request("GETANTOFF3", "1", Pending::GetAntOff3);
         break;
+    case Pending::GetAngle1:
+        send_request("GETANGLE1", "1", Pending::GetAngle1);
+        break;
+    case Pending::GetAngle2:
+        send_request("GETANGLE2", "1", Pending::GetAngle2);
+        break;
+    case Pending::GetAngle3:
+        send_request("GETANGLE3", "1", Pending::GetAngle3);
+        break;
     case Pending::GetAnemo:
         send_request("GETANEMO", "0", Pending::GetAnemo);
         break;
@@ -810,6 +1296,18 @@ static void on_ack_timeout()
         break;
     case Pending::GetWindDir:
         send_request("GETWINDDIR", "0", Pending::GetWindDir);
+        break;
+    case Pending::Test:
+        s_boot_test_timeout_count++;
+        if (s_boot_test_timeout_count >= 3) {
+            clear_pending();
+            s_boot_test_done = true;
+            rotor_error_app_set_error_code(10);
+            stop_fault_motion_polling();
+            s_next_conn_recovery_getref_ms = millis() - ROTOR_POLL_GAP_MS;
+        } else {
+            send_request("TEST", "0", Pending::Test);
+        }
         break;
     case Pending::None:
     default:
@@ -846,6 +1344,20 @@ static bool parse_ack_setref_result(const char *line)
     }
     if (s_poll_ref) {
         s_next_ref_poll_ms = millis() + ROTOR_POLL_GAP_MS;
+    }
+    return true;
+}
+
+static bool parse_ack_test(const char *line)
+{
+    if (!strstr(line, ":ACK_TEST:")) {
+        return false;
+    }
+    if (s_pending == Pending::Test) {
+        clear_pending();
+    }
+    if (!s_boot_test_done) {
+        s_boot_test_done = true;
     }
     return true;
 }
@@ -950,8 +1462,70 @@ static bool parse_ack_getantoff3(const char *line)
     if (s_antenna_boot_pending && s_antenna_boot_phase == 3 && was) {
         s_antenna_boot_pending = false;
         s_antenna_boot_phase = 0;
-        s_pending_pwm_save = true;
         s_pending_antenna_offset_notify = true;
+        s_angle_boot_pending = true;
+        s_angle_boot_phase = 1;
+        send_request("GETANGLE1", "1", Pending::GetAngle1);
+    }
+    return true;
+}
+
+static bool parse_ack_getangle1(const char *line)
+{
+    if (!strstr(line, ":ACK_GETANGLE1:")) {
+        return false;
+    }
+    const float v = parse_ack_antoff_value_after_tag(line, ":ACK_GETANGLE1:");
+    if (v == v) {
+        pwm_config_set_opening_deg(1, v);
+    }
+    const bool was = (s_pending == Pending::GetAngle1);
+    if (was) {
+        clear_pending();
+    }
+    if (s_angle_boot_pending && s_angle_boot_phase == 1 && was) {
+        send_request("GETANGLE2", "1", Pending::GetAngle2);
+        s_angle_boot_phase = 2;
+    }
+    return true;
+}
+
+static bool parse_ack_getangle2(const char *line)
+{
+    if (!strstr(line, ":ACK_GETANGLE2:")) {
+        return false;
+    }
+    const float v = parse_ack_antoff_value_after_tag(line, ":ACK_GETANGLE2:");
+    if (v == v) {
+        pwm_config_set_opening_deg(2, v);
+    }
+    const bool was = (s_pending == Pending::GetAngle2);
+    if (was) {
+        clear_pending();
+    }
+    if (s_angle_boot_pending && s_angle_boot_phase == 2 && was) {
+        send_request("GETANGLE3", "1", Pending::GetAngle3);
+        s_angle_boot_phase = 3;
+    }
+    return true;
+}
+
+static bool parse_ack_getangle3(const char *line)
+{
+    if (!strstr(line, ":ACK_GETANGLE3:")) {
+        return false;
+    }
+    const float v = parse_ack_antoff_value_after_tag(line, ":ACK_GETANGLE3:");
+    if (v == v) {
+        pwm_config_set_opening_deg(3, v);
+    }
+    const bool was = (s_pending == Pending::GetAngle3);
+    if (was) {
+        clear_pending();
+    }
+    if (s_angle_boot_pending && s_angle_boot_phase == 3 && was) {
+        s_angle_boot_pending = false;
+        s_angle_boot_phase = 0;
     }
     return true;
 }
@@ -996,10 +1570,10 @@ static bool parse_ack_getref(const char *line)
         return true;
     }
 
-    /* Homing fertig (referenziert): Ist abfragen, danach Soll = Ist */
     if (ref_ok && s_request_pos_after_homing) {
         s_request_pos_after_homing = false;
         s_poll_ref = false;
+        /* Sonst kein GETPOSDG — Ist bleibt „-“, Soll nicht angeglichen (nur Controller, kein PC) */
         s_align_target_after_pos_read = true;
         send_request("GETPOSDG", "0", Pending::GetPosDg);
         return true;
@@ -1114,7 +1688,11 @@ static bool parse_ack_err(const char *line)
         p++;
     }
     valbuf[i] = '\0';
-    rotor_error_app_set_error_code(atoi(valbuf));
+    const int code = atoi(valbuf);
+    if (code != 0) {
+        rotor_error_app_set_error_code(code);
+        stop_fault_motion_polling();
+    }
     if (s_pending == Pending::GetErr) {
         clear_pending();
     }
@@ -1154,6 +1732,13 @@ static bool parse_nak_and_clear(const char *line)
         s_request_pos_after_homing = false;
         return true;
     }
+    if (strstr(line, ":NAK_TEST:") && s_pending == Pending::Test) {
+        clear_pending();
+        if (!s_boot_test_done) {
+            s_boot_test_done = true;
+        }
+        return true;
+    }
     if (strstr(line, ":NAK_STOP:") && s_pending == Pending::Stop) {
         clear_pending();
         return true;
@@ -1175,6 +1760,21 @@ static bool parse_nak_and_clear(const char *line)
     if (strstr(line, ":NAK_GETANTOFF3:") && s_pending == Pending::GetAntOff3) {
         clear_pending();
         abort_antenna_boot();
+        return true;
+    }
+    if (strstr(line, ":NAK_GETANGLE1:") && s_pending == Pending::GetAngle1) {
+        clear_pending();
+        abort_angle_boot();
+        return true;
+    }
+    if (strstr(line, ":NAK_GETANGLE2:") && s_pending == Pending::GetAngle2) {
+        clear_pending();
+        abort_angle_boot();
+        return true;
+    }
+    if (strstr(line, ":NAK_GETANGLE3:") && s_pending == Pending::GetAngle3) {
+        clear_pending();
+        abort_angle_boot();
         return true;
     }
     if (strstr(line, ":NAK_GETERR:") && s_pending == Pending::GetErr) {
@@ -1220,6 +1820,12 @@ static bool parse_slave_err(const char *line)
         abort_antenna_boot();
         return true;
     }
+    if (s_pending == Pending::GetAngle1 || s_pending == Pending::GetAngle2 ||
+        s_pending == Pending::GetAngle3) {
+        clear_pending();
+        abort_angle_boot();
+        return true;
+    }
     if (s_pending == Pending::GetPosDg || s_pending == Pending::SetPosDg || s_pending == Pending::Stop ||
         s_pending == Pending::SetPwm) {
         clear_pending();
@@ -1254,8 +1860,20 @@ static void process_complete_line(const char *line, size_t len)
         s_last_foreign_master_to_slave_ms = millis();
     }
 
-    /* Broadcast SETASELECT: auch bei SRC = eigene Master-ID (USB-Loopback vom PC; kein Echo von hw_send). */
+    /* Befehl an den Slave (beliebiger Master): Start Timeout-Uhr „noch keine Slave-Antwort“ (z. B. nur PC) */
+    if (dst == (unsigned)s_slave_id && src != (unsigned)s_slave_id) {
+        if (s_conn_watch_start_ms == 0) {
+            s_conn_watch_start_ms = millis();
+        }
+    }
+
+    /* Broadcast DST=255: SETCONIDF / SETCONTID → neue master_id (config.json), wenn Controller-ID unbekannt */
     if (dst == ROTOR_RS485_BROADCAST_ID) {
+        if (strstr(line, ":SETCONIDF:") || strstr(line, ":SETCONTID:")) {
+            handle_broadcast_set_controller_master_id(line, src);
+            return;
+        }
+        /* SETASELECT: auch bei SRC = eigene Master-ID (USB-Loopback vom PC; kein Echo von hw_send). */
         if (strstr(line, ":SETASELECT:")) {
             unsigned v = 0;
             if (parse_setaselect_antenna_1_to_3(line, &v)) {
@@ -1266,6 +1884,11 @@ static void process_complete_line(const char *line, size_t len)
     }
 
     if (src == (unsigned)s_slave_id) {
+        s_last_slave_rx_ms = millis();
+        s_have_slave_rx_ever = true;
+        if (rotor_error_app_get_error_code() == 10) {
+            rotor_error_app_set_error_code(0);
+        }
         if (parse_slave_err(line)) {
             return;
         }
@@ -1282,6 +1905,9 @@ static void process_complete_line(const char *line, size_t len)
         if (parse_ack_setref_result(line)) {
             return;
         }
+        if (parse_ack_test(line)) {
+            return;
+        }
         if (parse_ack_stop(line)) {
             return;
         }
@@ -1295,6 +1921,15 @@ static void process_complete_line(const char *line, size_t len)
             return;
         }
         if (parse_ack_getantoff3(line)) {
+            return;
+        }
+        if (parse_ack_getangle1(line)) {
+            return;
+        }
+        if (parse_ack_getangle2(line)) {
+            return;
+        }
+        if (parse_ack_getangle3(line)) {
             return;
         }
         if (parse_ack_err(line)) {
@@ -1315,8 +1950,15 @@ static void process_complete_line(const char *line, size_t len)
         return;
     }
 
+    /* PC → Controller (master_id): Konfiguration wie config.json; Antwort per hw_send → RS485 + USB */
+    if (dst == (unsigned)s_master_id) {
+        if (handle_local_config_command(line, src, dst)) {
+            return;
+        }
+    }
+
     if (dst == (unsigned)s_slave_id) {
-        dispatch_bus_command_to_slave(line);
+        dispatch_bus_command_to_slave(line, src);
     }
 }
 
@@ -1359,6 +2001,12 @@ void rotor_rs485_rx_bytes(const uint8_t *data, size_t len)
 
 void rotor_rs485_init(void)
 {
+    s_boot_test_done = false;
+    s_boot_test_timeout_count = 0;
+    s_last_slave_rx_ms = 0;
+    s_have_slave_rx_ever = false;
+    s_conn_watch_start_ms = 0;
+    s_next_conn_recovery_getref_ms = 0;
     s_boot_earliest_ms = millis() + ROTOR_BOOT_QUERY_DELAY_MS;
     s_boot_done = false;
     s_boot_phase = 0;
@@ -1371,9 +2019,31 @@ void rotor_rs485_init(void)
     s_weather_phase = 0;
 }
 
+/** Erstes Paket nach Einschalten: TEST (Ping), 3 Versuche ohne ACK → Fehler 10 */
+static void try_boot_test(void)
+{
+    if (s_boot_test_done) {
+        return;
+    }
+    const int e = rotor_error_app_get_error_code();
+    if (e != 0 && e != 10) {
+        return;
+    }
+    if (s_pending != Pending::None) {
+        return;
+    }
+    if (s_boot_test_timeout_count > 0) {
+        return;
+    }
+    send_request("TEST", "0", Pending::Test);
+}
+
 static void try_boot_getref()
 {
     if (s_boot_done || s_pending != Pending::None) {
+        return;
+    }
+    if (!s_boot_test_done) {
         return;
     }
     if ((int32_t)(millis() - s_boot_earliest_ms) < 0) {
@@ -1384,6 +2054,9 @@ static void try_boot_getref()
     }
     send_request("GETREF", "0", Pending::GetRef);
     s_boot_phase = 1;
+    if (s_conn_watch_start_ms == 0) {
+        s_conn_watch_start_ms = millis();
+    }
 }
 
 /** Erstes GETANTOFF1 nach Boot (Kette ACK → GET2 → GET3 in den Parsern). */
@@ -1408,6 +2081,9 @@ static void try_weather_poll(void)
     if (s_antenna_boot_pending && s_antenna_boot_phase != 0) {
         return;
     }
+    if (s_angle_boot_pending && s_angle_boot_phase != 0) {
+        return;
+    }
     if ((int32_t)(millis() - s_next_weather_ms) < 0) {
         return;
     }
@@ -1428,9 +2104,52 @@ static void try_weather_poll(void)
 
 void rotor_rs485_loop(void)
 {
+    const int err = rotor_error_app_get_error_code();
+    /* Harte Fehler (≠10): kein Polling — Verbindungstimeout (10): GETREF-Recovery weiter unten */
+    if (err != 0 && err != 10) {
+        return;
+    }
+
+    if (err != 10 && s_boot_test_done) {
+        const uint32_t now = millis();
+        bool conn_timeout = false;
+        if (s_have_slave_rx_ever) {
+            if ((uint32_t)(now - s_last_slave_rx_ms) >= ROTOR_CONN_LOST_TIMEOUT_MS) {
+                conn_timeout = true;
+            }
+        } else if (s_conn_watch_start_ms != 0 &&
+                   (uint32_t)(now - s_conn_watch_start_ms) >= ROTOR_CONN_LOST_TIMEOUT_MS) {
+            conn_timeout = true;
+        }
+        if (conn_timeout) {
+            clear_pending();
+            rotor_error_app_set_error_code(10);
+            stop_fault_motion_polling();
+            s_next_conn_recovery_getref_ms = millis() - ROTOR_POLL_GAP_MS;
+            return;
+        }
+    }
+
     on_ack_timeout();
 
     if (s_pending != Pending::None) {
+        return;
+    }
+
+    try_boot_test();
+
+    if (s_pending != Pending::None) {
+        return;
+    }
+
+    /* Fehler 10: zyklisch GETREF vor anderem Bus-Traffic (kein HW-Snap solange offline) */
+    if (rotor_error_app_get_error_code() == 10) {
+        if (!rotor_rs485_is_foreign_pc_listen_mode()) {
+            if ((int32_t)(millis() - s_next_conn_recovery_getref_ms) >= 0) {
+                send_request("GETREF", "0", Pending::GetRef);
+                s_next_conn_recovery_getref_ms = millis() + ROTOR_POLL_GAP_MS;
+            }
+        }
         return;
     }
 

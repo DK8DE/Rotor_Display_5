@@ -1,5 +1,6 @@
 /**
- * config.json auf FFat (data/ → uploadfs): PWM, RS485-IDs, Antennen-Bezeichner, Versätze, letzte Antenne.
+ * config.json auf FFat (data/ → uploadfs): PWM, RS485-IDs, Antennen-Bezeichner, letzte Antenne.
+ * Antennenversätze kommen zur Laufzeit vom Rotor (GETANTOFFn), nicht aus der Datei.
  */
 
 #include "pwm_config.h"
@@ -7,7 +8,6 @@
 #include <FFat.h>
 #include <Arduino.h>
 #include <ctype.h>
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,10 +16,15 @@ static uint8_t s_slow = 50;
 static uint8_t s_fast = 100;
 static uint8_t s_master_id = 2;
 static uint8_t s_rotor_id = 20;
+/** GETCONFRQ/SETCONFRQ — Touch-Pieps Frequenz (Hz) */
+static uint16_t s_touch_beep_freq_hz = 1100;
+/** GETLSL/SETLSL — Touch-Pieps Lautstärke (0…50, wie Signals::tone) */
+static uint8_t s_touch_beep_vol = 14;
 
 static char s_ant_label[3][48];
 static uint8_t s_last_antenna = 1;
 static float s_antoff_deg[3] = { 0.0f, 0.0f, 0.0f };
+static float s_opening_deg[3] = { 0.0f, 0.0f, 0.0f };
 
 static int parse_int_after_key(const char *json, const char *key)
 {
@@ -36,28 +41,6 @@ static int parse_int_after_key(const char *json, const char *key)
         ++p;
     }
     return atoi(p);
-}
-
-static float parse_float_after_key(const char *json, const char *key)
-{
-    const char *p = strstr(json, key);
-    if (!p) {
-        return NAN;
-    }
-    p = strchr(p, ':');
-    if (!p) {
-        return NAN;
-    }
-    ++p;
-    while (*p && (*p == ' ' || *p == '\t')) {
-        ++p;
-    }
-    char *end = nullptr;
-    double v = strtod(p, &end);
-    if (end == p) {
-        return NAN;
-    }
-    return (float)v;
 }
 
 /** "key": "value" — value ohne escapte Anführungszeichen in value */
@@ -125,6 +108,8 @@ void pwm_config_load_defaults(void)
     s_antoff_deg[0] = s_antoff_deg[1] = s_antoff_deg[2] = 0.0f;
     s_master_id = 2;
     s_rotor_id = 20;
+    s_touch_beep_freq_hz = 1100;
+    s_touch_beep_vol = 14;
 }
 
 void pwm_config_load(void)
@@ -172,13 +157,13 @@ void pwm_config_load(void)
         strncpy(s_ant_label[2], tmp, sizeof(s_ant_label[2]) - 1);
         s_ant_label[2][sizeof(s_ant_label[2]) - 1] = '\0';
     }
-    for (int i = 0; i < 3; i++) {
-        char key[24];
-        snprintf(key, sizeof(key), "antoff%u_deg", (unsigned)(i + 1));
-        float v = parse_float_after_key(buf, key);
-        if (!isnan(v)) {
-            s_antoff_deg[i] = v;
-        }
+    int cf = parse_int_after_key(buf, "confrq");
+    if (cf >= 200 && cf <= 4000) {
+        s_touch_beep_freq_hz = (uint16_t)cf;
+    }
+    int lsl = parse_int_after_key(buf, "lsl");
+    if (lsl >= 0 && lsl <= 50) {
+        s_touch_beep_vol = (uint8_t)lsl;
     }
 }
 
@@ -192,7 +177,7 @@ void pwm_config_save(void)
     escape_json_string(s_ant_label[0], e1, sizeof(e1));
     escape_json_string(s_ant_label[1], e2, sizeof(e2));
     escape_json_string(s_ant_label[2], e3, sizeof(e3));
-    char line[768];
+    char line[896];
     snprintf(line, sizeof(line),
              "{\n"
              "  \"slow_pwm\": %u,\n"
@@ -203,13 +188,11 @@ void pwm_config_save(void)
              "  \"antenna_2_label\": \"%s\",\n"
              "  \"antenna_3_label\": \"%s\",\n"
              "  \"last_antenna\": %u,\n"
-             "  \"antoff1_deg\": %.2f,\n"
-             "  \"antoff2_deg\": %.2f,\n"
-             "  \"antoff3_deg\": %.2f\n"
+             "  \"confrq\": %u,\n"
+             "  \"lsl\": %u\n"
              "}\n",
              (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_master_id, (unsigned)s_rotor_id, e1, e2, e3,
-             (unsigned)s_last_antenna,
-             (double)s_antoff_deg[0], (double)s_antoff_deg[1], (double)s_antoff_deg[2]);
+             (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol);
     f.print(line);
     f.close();
 }
@@ -232,6 +215,34 @@ uint8_t pwm_config_get_master_id(void)
 uint8_t pwm_config_get_rotor_id(void)
 {
     return s_rotor_id;
+}
+
+void pwm_config_set_master_id(uint8_t id)
+{
+    if (id >= 1u && id <= 254u) {
+        s_master_id = id;
+    }
+}
+
+void pwm_config_set_rotor_id(uint8_t id)
+{
+    if (id >= 1u && id <= 254u) {
+        s_rotor_id = id;
+    }
+}
+
+void pwm_config_set_slow(uint8_t pct)
+{
+    if (pct <= 100u) {
+        s_slow = pct;
+    }
+}
+
+void pwm_config_set_fast(uint8_t pct)
+{
+    if (pct <= 100u) {
+        s_fast = pct;
+    }
 }
 
 uint8_t pwm_config_get_last_antenna(void)
@@ -277,4 +288,49 @@ void pwm_config_set_antoff_deg(int idx, float deg)
         return;
     }
     s_antoff_deg[idx - 1] = deg;
+}
+
+float pwm_config_get_opening_deg(int idx)
+{
+    if (idx < 1 || idx > 3) {
+        return 0.0f;
+    }
+    return s_opening_deg[idx - 1];
+}
+
+void pwm_config_set_opening_deg(int idx, float deg)
+{
+    if (idx < 1 || idx > 3) {
+        return;
+    }
+    if (deg < 0.0f) {
+        deg = 0.0f;
+    } else if (deg > 360.0f) {
+        deg = 360.0f;
+    }
+    s_opening_deg[idx - 1] = deg;
+}
+
+uint16_t pwm_config_get_touch_beep_freq_hz(void)
+{
+    return s_touch_beep_freq_hz;
+}
+
+void pwm_config_set_touch_beep_freq_hz(uint16_t hz)
+{
+    if (hz >= 200u && hz <= 4000u) {
+        s_touch_beep_freq_hz = hz;
+    }
+}
+
+uint8_t pwm_config_get_touch_beep_vol(void)
+{
+    return s_touch_beep_vol;
+}
+
+void pwm_config_set_touch_beep_vol(uint8_t vol)
+{
+    if (vol <= 50u) {
+        s_touch_beep_vol = vol;
+    }
 }

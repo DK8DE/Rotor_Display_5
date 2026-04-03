@@ -57,8 +57,8 @@ void rotor_rs485_set_position_callback(rotor_rs485_pos_cb_t cb);
 void rotor_rs485_set_target_callback(rotor_rs485_target_cb_t cb);
 
 /**
- * Nach serial_bridge::poll() aufrufen: NVS/config.json schreiben und Antennen-UI nachziehen —
- * darf nicht im RS485-Zeilenparser laufen (Flash blockiert, LVGL).
+ * Nach serial_bridge::poll() aufrufen: Antennen-UI nachziehen wenn Versatz vom Bus kam —
+ * darf nicht im RS485-Zeilenparser laufen (LVGL).
  */
 void rotor_rs485_idle_tasks(void);
 

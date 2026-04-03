@@ -89,10 +89,13 @@ void Signals::tone(uint16_t freq, uint8_t vol, uint16_t durationMs)
     snprintf(buf, sizeof(buf), "T %u %u", (unsigned)freq, (unsigned)vol);
     sendLine(buf);
   }
+  /* Zeile vollständig zum ATtiny schicken — sonst können schnelle Folgebefehle zerstückeln (Dauerton). */
+  _serial.flush();
 }
 
 void Signals::stopTone()
 {
   // X
   sendLine("X");
+  _serial.flush();
 }

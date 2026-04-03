@@ -13,6 +13,9 @@ void rotor_pwm_ui_loop(void);
 /** Nach serial_bridge::poll + rotor_rs485_idle_tasks aus loop() — Label wind_speed / temperature. */
 void rotor_app_weather_ui_poll(void);
 
+/** Nach pwm_config-Änderung per RS485/USB (Labels, IDs, PWM-Anzeige; LVGL intern). */
+void rotor_app_config_changed_from_bus(void);
+
 /**
  * Encoder: delta_tenths = Änderung in Zehntelgraden (Skalierung z. B. in main).
  * SETPOSDG erst nach 200 ms ohne neuen Tick; rotor_app_loop() aus loop() aufrufen (Retry bei blockiertem Bus).
@@ -20,6 +23,9 @@ void rotor_app_weather_ui_poll(void);
  */
 void rotor_app_encoder_step(int delta_tenths);
 void rotor_app_loop(void);
+
+/** Ist in Anzeige-Koordinaten (Bus + Antennenversatz der gewählten Antenne), wie LVGL-Arc — für NeoPixel-Ring. */
+float rotor_app_get_display_direction_deg(void);
 
 /** Noch nicht abgearbeitete Encoder-Rasten ±1 (main.cpp); für on_target_deg: Bus nicht vor encoder_process_pending überschreiben. */
 int rotor_encoder_pending_detents(void);
