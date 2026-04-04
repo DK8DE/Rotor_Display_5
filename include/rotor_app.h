@@ -31,6 +31,13 @@ float rotor_app_get_display_direction_deg(void);
 int rotor_encoder_pending_detents(void);
 
 /**
+ * Hardware-Taster: wenn ein ID-Feld (rotor_id / controller_id) fokussiert ist — Fokus weg.
+ * Flash (config.json) nur wenn die Zahl gültig ist und sich von der gespeicherten unterscheidet.
+ * @return true wenn behandelt (kein Homing/Stop/Snap in diesem Klick).
+ */
+bool rotor_app_commit_id_field_on_hw_click(void);
+
+/**
  * Encoder-Session beenden, Soll-Anzeige + internen Soll auf deg setzen (z. B. Hardware-Taster: Ziel = Ist).
  * Muss vor rotor_rs485_goto_degrees(deg) aufgerufen werden, sonst blockiert on_target_deg und
  * rotor_app_loop kann ein veraltetes SETPOSDG erneut senden.

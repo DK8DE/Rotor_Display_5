@@ -50,6 +50,12 @@ static constexpr uint32_t ENCODER_SEND_IDLE_MS = 670;
 /** false (Test): Encoder ändert nur Soll-Text + Bus, Arc bleibt; true: Arc folgt dem Encoder wie bisher */
 static constexpr bool ENCODER_MOVES_ARC = false;
 
+/** Tab Rotor_Info: Encoder/Tippen nur Vorschau; Flash nur per HW-Taster und nur bei geänderter Zahl */
+enum class IdFieldFocus : uint8_t { None = 0, RotorId, ControllerId };
+static IdFieldFocus s_id_field_focus = IdFieldFocus::None;
+/** Verhindert Rekursion bei lv_textarea_set_text → VALUE_CHANGED */
+static bool s_id_field_programmatic_text = false;
+
 /** Slow/Fast: Bus belegt → PWM erneut in rotor_pwm_ui_loop */
 static uint8_t s_pwm_deferred = 255;
 /** Nach Start: einmal Fast-PWM aus config (SETPWM) */
@@ -149,6 +155,36 @@ static void on_antenna_btn(lv_event_t *e)
     rotor_rs485_send_setaselect(n);
 }
 
+/** hauptanzeige: Tab 0…4 = Position, Fast, Antennen, Temperaturen_Wind, Rotor_Info */
+static constexpr uint32_t k_weather_tab_idx = 3u;
+
+static void apply_anemometer_weather_tab_visibility(void)
+{
+    if (!objects.hauptanzeige || !objects.temperaturen_wind) {
+        return;
+    }
+    const bool show = pwm_config_get_anemometer() != 0;
+    lv_obj_t *const tv = objects.hauptanzeige;
+    lv_obj_t *const btns = lv_tabview_get_tab_btns(tv);
+    if (show) {
+        lv_obj_clear_flag(objects.temperaturen_wind, LV_OBJ_FLAG_HIDDEN);
+        if (btns) {
+            lv_btnmatrix_clear_btn_ctrl(btns, static_cast<uint16_t>(k_weather_tab_idx),
+                                        LV_BTNMATRIX_CTRL_HIDDEN);
+        }
+    } else {
+        if (static_cast<uint32_t>(lv_tabview_get_tab_act(tv)) == k_weather_tab_idx) {
+            lv_tabview_set_act(tv, 0, LV_ANIM_OFF);
+        }
+        lv_obj_add_flag(objects.temperaturen_wind, LV_OBJ_FLAG_HIDDEN);
+        if (btns) {
+            lv_btnmatrix_set_btn_ctrl(btns, static_cast<uint16_t>(k_weather_tab_idx),
+                                      LV_BTNMATRIX_CTRL_HIDDEN);
+        }
+    }
+    lv_obj_invalidate(tv);
+}
+
 static void antenna_apply_labels_from_config(void)
 {
     if (objects.antenna_1_label) {
@@ -162,6 +198,170 @@ static void antenna_apply_labels_from_config(void)
     }
 }
 
+static void id_fields_set_text(lv_obj_t *ta, unsigned id_1_to_254)
+{
+    if (!ta) {
+        return;
+    }
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%u", id_1_to_254);
+    s_id_field_programmatic_text = true;
+    lv_textarea_set_text(ta, buf);
+    s_id_field_programmatic_text = false;
+}
+
+/** Nach load / RS485-SET: Anzeige = config (ohne Fokus auf ID-Felder zu ändern) */
+static void id_fields_sync_textareas_from_config(void)
+{
+    id_fields_set_text(objects.rotor_id, pwm_config_get_rotor_id());
+    id_fields_set_text(objects.controller_id, pwm_config_get_master_id());
+}
+
+/** Nur parsen (1…254), kein Schreiben */
+static bool id_field_parse_ta_id(lv_obj_t *ta, uint8_t *out)
+{
+    if (!ta || !out) {
+        return false;
+    }
+    const char *p = lv_textarea_get_text(ta);
+    if (!p) {
+        return false;
+    }
+    while (*p == ' ' || *p == '\t') {
+        ++p;
+    }
+    if (*p == '\0') {
+        return false;
+    }
+    char *end = nullptr;
+    const long v = strtol(p, &end, 10);
+    if (end == p) {
+        return false;
+    }
+    while (*end == ' ' || *end == '\t') {
+        ++end;
+    }
+    if (*end != '\0') {
+        return false;
+    }
+    if (v < 1L || v > 254L) {
+        return false;
+    }
+    *out = static_cast<uint8_t>(v);
+    return true;
+}
+
+/**
+ * Nur beim HW-Taster: gültige Zahl → bei Abweichung von der Config RS485 + pwm_config_save();
+ * gleicher Wert → nur Text normalisieren, kein Flash-Schreiben.
+ * @return false bei ungültigem Inhalt (kein save).
+ */
+static bool id_field_try_commit_text(lv_obj_t *ta, bool is_rotor_id)
+{
+    if (!ta) {
+        return false;
+    }
+    uint8_t nv = 0;
+    if (!id_field_parse_ta_id(ta, &nv)) {
+        return false;
+    }
+    const uint8_t cur =
+        is_rotor_id ? pwm_config_get_rotor_id() : pwm_config_get_master_id();
+    if (nv != cur) {
+        if (is_rotor_id) {
+            pwm_config_set_rotor_id(nv);
+            rotor_rs485_set_slave_id(nv);
+        } else {
+            pwm_config_set_master_id(nv);
+            rotor_rs485_set_master_id(nv);
+        }
+        pwm_config_save();
+    }
+    id_fields_set_text(ta, nv);
+    return true;
+}
+
+static uint8_t id_field_display_or_saved_config(lv_obj_t *ta, bool is_rotor_id)
+{
+    uint8_t v = 0;
+    if (id_field_parse_ta_id(ta, &v)) {
+        return v;
+    }
+    return is_rotor_id ? pwm_config_get_rotor_id() : pwm_config_get_master_id();
+}
+
+static void id_field_blur(lv_obj_t *ta)
+{
+    if (!ta) {
+        return;
+    }
+    lv_group_t *const g = static_cast<lv_group_t *>(lv_obj_get_group(ta));
+    if (g) {
+        lv_group_focus_next(g);
+    } else {
+        lv_obj_clear_state(ta, LV_STATE_FOCUSED | LV_STATE_FOCUS_KEY);
+    }
+}
+
+extern "C" bool rotor_app_commit_id_field_on_hw_click(void)
+{
+    if (s_id_field_focus == IdFieldFocus::None) {
+        return false;
+    }
+    lvgl_port_lock(-1);
+    const bool is_rotor = (s_id_field_focus == IdFieldFocus::RotorId);
+    lv_obj_t *const ta = is_rotor ? objects.rotor_id : objects.controller_id;
+    if (!ta) {
+        s_id_field_focus = IdFieldFocus::None;
+        lvgl_port_unlock();
+        return false;
+    }
+    if (!id_field_try_commit_text(ta, is_rotor)) {
+        const uint8_t id = is_rotor ? pwm_config_get_rotor_id() : pwm_config_get_master_id();
+        id_fields_set_text(ta, id);
+    }
+    id_field_blur(ta);
+    s_id_field_focus = IdFieldFocus::None;
+    lvgl_port_unlock();
+    return true;
+}
+
+static void on_id_field_event(lv_event_t *e)
+{
+    const lv_event_code_t code = lv_event_get_code(e);
+    if (code != LV_EVENT_FOCUSED && code != LV_EVENT_DEFOCUSED && code != LV_EVENT_VALUE_CHANGED) {
+        return;
+    }
+    lv_obj_t *ta = lv_event_get_target(e);
+    const bool is_rotor = (ta == objects.rotor_id);
+
+    if (code == LV_EVENT_FOCUSED) {
+        s_id_field_focus = is_rotor ? IdFieldFocus::RotorId : IdFieldFocus::ControllerId;
+        const uint8_t id = is_rotor ? pwm_config_get_rotor_id() : pwm_config_get_master_id();
+        id_fields_set_text(ta, id);
+        /* Encoder soll Winkel nicht weiter bedienen; Bus darf taget_dg wieder nachführen */
+        s_encoder_adjusting = false;
+        s_encoder_goto_retry_pending = false;
+        s_encoder_retry_deadline_ms = 0;
+        s_encoder_idle_deadline_ms = 0;
+        return;
+    }
+    if (code == LV_EVENT_DEFOCUSED) {
+        /* Kein Flash-Schreiben beim Verlassen — nur gespeicherten Wert anzeigen */
+        const uint8_t id = is_rotor ? pwm_config_get_rotor_id() : pwm_config_get_master_id();
+        id_fields_set_text(ta, id);
+        s_id_field_focus = IdFieldFocus::None;
+        return;
+    }
+    if (code == LV_EVENT_VALUE_CHANGED) {
+        if (s_id_field_programmatic_text) {
+            return;
+        }
+        /* Tippen: nur Vorschau; Speichern nur per HW-Taster wenn Zahl sich geändert hat */
+        return;
+    }
+}
+
 extern "C" void rotor_app_config_changed_from_bus(void)
 {
     lvgl_port_lock(-1);
@@ -170,6 +370,8 @@ extern "C" void rotor_app_config_changed_from_bus(void)
     pwm_style_slow_fast(s_pwm_ui_is_fast);
     rotor_rs485_set_master_id(pwm_config_get_master_id());
     rotor_rs485_set_slave_id(pwm_config_get_rotor_id());
+    id_fields_sync_textareas_from_config();
+    apply_anemometer_weather_tab_visibility();
     const uint8_t p = s_pwm_ui_is_fast ? pwm_config_get_fast() : pwm_config_get_slow();
     if (!rotor_rs485_send_set_pwm_limit(p)) {
         s_pwm_deferred = p;
@@ -566,6 +768,9 @@ extern "C" void rotor_app_init(void)
     }
     if (objects.grad_acc) {
         lv_obj_add_event_cb(objects.grad_acc, on_arc, LV_EVENT_ALL, nullptr);
+        /* Arc-Knauf (Zeiger-Punkt): rot — nur Laufzeit, keine Änderung in ui/screens.c */
+        lv_obj_set_style_bg_color(objects.grad_acc, lv_color_hex(0xff0000), LV_PART_KNOB);
+        lv_obj_set_style_bg_opa(objects.grad_acc, LV_OPA_COVER, LV_PART_KNOB);
     }
     pwm_style_slow_fast(true);
     if (objects.slow) {
@@ -596,6 +801,14 @@ extern "C" void rotor_app_init(void)
         lv_obj_set_style_transform_pivot_y(objects.pfeil_wind, lv_pct(50), 0);
         lv_obj_set_style_transform_angle(objects.pfeil_wind, s_pfeil_wind_eez_base_angle01, 0);
     }
+    if (objects.rotor_id) {
+        lv_obj_add_event_cb(objects.rotor_id, on_id_field_event, LV_EVENT_ALL, nullptr);
+    }
+    if (objects.controller_id) {
+        lv_obj_add_event_cb(objects.controller_id, on_id_field_event, LV_EVENT_ALL, nullptr);
+    }
+    id_fields_sync_textareas_from_config();
+    apply_anemometer_weather_tab_visibility();
     /* GETREF/GETPOSDG nach 2 s Bus-Bereitschaft — siehe rotor_rs485_init / rotor_rs485_loop */
 }
 
@@ -612,11 +825,38 @@ static bool encoder_apply_goto(float target_deg)
 
 extern "C" void rotor_app_encoder_step(int delta_tenths)
 {
-    /* Soll-Feld zählt — Arc (grad_acc) ist optional (ENCODER_MOVES_ARC). */
-    if (!objects.taget_dg || delta_tenths == 0) {
+    if (delta_tenths == 0) {
         return;
     }
     if (rotor_error_app_is_fault_locked()) {
+        return;
+    }
+
+    /* Rotor_Info: Encoder nur Vorschau — Speichern per HW-Taster oder Tastatur (VALUE_CHANGED) */
+    if (s_id_field_focus != IdFieldFocus::None) {
+        const int sign = (delta_tenths > 0) ? 1 : -1;
+        lvgl_port_lock(-1);
+        lv_obj_t *const ta =
+            (s_id_field_focus == IdFieldFocus::RotorId) ? objects.rotor_id : objects.controller_id;
+        if (ta) {
+            const bool is_rotor = (s_id_field_focus == IdFieldFocus::RotorId);
+            const uint8_t v = id_field_display_or_saved_config(ta, is_rotor);
+            int nv = static_cast<int>(v) + sign;
+            if (nv < 1) {
+                nv = 1;
+            }
+            if (nv > 254) {
+                nv = 254;
+            }
+            const uint8_t newv = static_cast<uint8_t>(nv);
+            id_fields_set_text(ta, newv);
+        }
+        lvgl_port_unlock();
+        return;
+    }
+
+    /* Soll-Feld zählt — Arc (grad_acc) ist optional (ENCODER_MOVES_ARC). */
+    if (!objects.taget_dg) {
         return;
     }
 
@@ -663,9 +903,8 @@ extern "C" void rotor_app_antenna_offset_changed(void)
 }
 
 /**
- * Wind/Temperatur/Windrichtung: Werte im Parser; UI hier in loop() (nicht im Parser / kein lv_async).
- * Windrichtung: Drehung per lv_obj_set_style_transform_angle (Pivot 50%), nicht lv_img_set_angle;
- * Basis aus EEZ-Snapshot s_pfeil_wind_eez_base_angle01 + Meteor (0,1°).
+ * Wind/Außentemp/Windrichtung nur bei anemometer=1; Motortemp (Bit 0x8) immer.
+ * Werte im Parser; UI hier in loop() (nicht im Parser / kein lv_async).
  */
 extern "C" void rotor_app_weather_ui_poll(void)
 {
@@ -675,11 +914,13 @@ extern "C" void rotor_app_weather_ui_poll(void)
     }
     const float w = rotor_rs485_get_last_wind_kmh();
     const float t = rotor_rs485_get_last_tempa_c();
+    const float tm = rotor_rs485_get_last_tempm_c();
     const float dir = rotor_rs485_get_last_wind_dir_deg();
+    const bool ano = pwm_config_get_anemometer() != 0;
     lvgl_port_lock(-1);
     char buf[24];
     /* EEZ: wind_speed / temperature sind lv_textarea (Wind max. 5 Zeichen, z. B. „123,4“), keine lv_label */
-    if (m & 1u) {
+    if (ano && (m & 1u)) {
         float wd = w;
         if (wd > 999.9f) {
             wd = 999.9f;
@@ -689,13 +930,13 @@ extern "C" void rotor_app_weather_ui_poll(void)
             lv_textarea_set_text(objects.wind_speed, buf);
         }
     }
-    if (m & 2u) {
+    if (ano && (m & 2u)) {
         fmt_de(buf, sizeof(buf), t);
         if (objects.temperature) {
             lv_textarea_set_text(objects.temperature, buf);
         }
     }
-    if (m & 4u) {
+    if (ano && (m & 4u)) {
         if (objects.pfeil_wind) {
             int32_t ang = static_cast<int32_t>(s_pfeil_wind_eez_base_angle01)
                 + static_cast<int32_t>(dir * 10.0f + 0.5f);
@@ -707,6 +948,16 @@ extern "C" void rotor_app_weather_ui_poll(void)
             }
             lv_obj_set_style_transform_angle(objects.pfeil_wind, static_cast<lv_coord_t>(ang), 0);
             lv_obj_invalidate(objects.pfeil_wind);
+        }
+    }
+    if (m & 8u) {
+        float mtd = tm;
+        if (mtd > 999.9f) {
+            mtd = 999.9f;
+        }
+        fmt_de(buf, sizeof(buf), mtd);
+        if (objects.motor_temperatur) {
+            lv_textarea_set_text(objects.motor_temperatur, buf);
         }
     }
     lvgl_port_unlock();

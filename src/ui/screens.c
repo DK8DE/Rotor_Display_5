@@ -13,7 +13,7 @@
 objects_t objects;
 
 static const char *screen_names[] = { "Main" };
-static const char *object_names[] = { "main", "kompass_bg", "grad_acc", "hauptanzeige", "position", "label_gradzeichen_a", "label_gradzeichen_t", "actual_dg", "taget_dg", "label_actual", "meldetext", "label_target", "homing_led", "fast_menue", "slow", "label__slow", "fast", "label_fast", "ref", "ref_label", "fast_menue_1", "antenna_1", "antenna_1_label", "antenna_2", "antenna_2_label", "antenna_3", "antenna_3_label", "temperaturen_wind", "label_wind_speed", "pfeil_wind", "label_aussen_temp", "temperature", "wind_speed" };
+static const char *object_names[] = { "main", "kompass_bg", "grad_acc", "hauptanzeige", "position", "label_gradzeichen_a", "label_gradzeichen_t", "actual_dg", "taget_dg", "label_actual", "meldetext", "label_target", "homing_led", "fast_menue", "slow", "label__slow", "fast", "label_fast", "ref", "ref_label", "fast_menue_1", "antenna_1", "antenna_1_label", "antenna_2", "antenna_2_label", "antenna_3", "antenna_3_label", "temperaturen_wind", "label_wind_speed", "pfeil_wind", "label_aussen_temp", "temperature", "wind_speed", "rotor_info", "label_rotor_id", "label_motortemperatur", "motor_temperatur", "rotor_id", "controller_id", "master_id_label" };
 
 //
 // Event handlers
@@ -56,6 +56,7 @@ void create_screen_main() {
             lv_arc_set_bg_end_angle(obj, 360);
             lv_arc_set_rotation(obj, 270);
             lv_obj_add_state(obj, LV_STATE_FOCUSED|LV_STATE_FOCUS_KEY);
+            lv_obj_set_style_arc_rounded(obj, true, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_arc_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
         }
         {
@@ -395,6 +396,90 @@ void create_screen_main() {
                             lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_CLICK_FOCUSABLE);
                             add_style_grosse_zahlen(obj);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                        }
+                    }
+                }
+                {
+                    // Rotor_Info
+                    lv_obj_t *obj = lv_tabview_add_tab(parent_obj, "Tab");
+                    objects.rotor_info = obj;
+                    lv_obj_set_scrollbar_mode(obj, LV_SCROLLBAR_MODE_OFF);
+                    lv_obj_set_scroll_dir(obj, LV_DIR_HOR);
+                    add_style_tabs(obj);
+                    lv_obj_set_style_radius(obj, 60, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_clip_corner(obj, true, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    {
+                        lv_obj_t *parent_obj = obj;
+                        {
+                            // Label Rotor ID
+                            lv_obj_t *obj = lv_label_create(parent_obj);
+                            objects.label_rotor_id = obj;
+                            lv_obj_set_pos(obj, 109, 113);
+                            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_label_set_text(obj, "Rotor ID");
+                        }
+                        {
+                            // Label Motortemperatur
+                            lv_obj_t *obj = lv_label_create(parent_obj);
+                            objects.label_motortemperatur = obj;
+                            lv_obj_set_pos(obj, 109, 173);
+                            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_label_set_text(obj, "°C Motor");
+                        }
+                        {
+                            // Motor_Temperatur
+                            lv_obj_t *obj = lv_textarea_create(parent_obj);
+                            objects.motor_temperatur = obj;
+                            lv_obj_set_pos(obj, 22, 169);
+                            lv_obj_set_size(obj, 69, 37);
+                            lv_textarea_set_max_length(obj, 128);
+                            lv_textarea_set_text(obj, "25.1");
+                            lv_textarea_set_one_line(obj, true);
+                            lv_textarea_set_password_mode(obj, false);
+                            lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_CLICK_FOCUSABLE);
+                            add_style_grosse_zahlen(obj);
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                        }
+                        {
+                            // Rotor_ID
+                            lv_obj_t *obj = lv_textarea_create(parent_obj);
+                            objects.rotor_id = obj;
+                            lv_obj_set_pos(obj, 22, 108);
+                            lv_obj_set_size(obj, 69, 37);
+                            lv_textarea_set_max_length(obj, 3);
+                            lv_textarea_set_text(obj, "20");
+                            lv_textarea_set_placeholder_text(obj, "20");
+                            lv_textarea_set_one_line(obj, true);
+                            lv_textarea_set_password_mode(obj, false);
+                            lv_obj_add_flag(obj, LV_OBJ_FLAG_CHECKABLE);
+                            add_style_grosse_zahlen(obj);
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                        }
+                        {
+                            // Controller_ID
+                            lv_obj_t *obj = lv_textarea_create(parent_obj);
+                            objects.controller_id = obj;
+                            lv_obj_set_pos(obj, 22, 48);
+                            lv_obj_set_size(obj, 69, 37);
+                            lv_textarea_set_max_length(obj, 3);
+                            lv_textarea_set_text(obj, "2");
+                            lv_textarea_set_placeholder_text(obj, "2");
+                            lv_textarea_set_one_line(obj, true);
+                            lv_textarea_set_password_mode(obj, false);
+                            lv_obj_add_flag(obj, LV_OBJ_FLAG_CHECKABLE);
+                            add_style_grosse_zahlen(obj);
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                        }
+                        {
+                            // Master ID Label
+                            lv_obj_t *obj = lv_label_create(parent_obj);
+                            objects.master_id_label = obj;
+                            lv_obj_set_pos(obj, 109, 52);
+                            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_label_set_text(obj, "Master ID");
                         }
                     }
                 }

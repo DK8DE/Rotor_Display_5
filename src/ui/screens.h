@@ -49,6 +49,13 @@ typedef struct _objects_t {
     lv_obj_t *label_aussen_temp;
     lv_obj_t *temperature;
     lv_obj_t *wind_speed;
+    lv_obj_t *rotor_info;
+    lv_obj_t *label_rotor_id;
+    lv_obj_t *label_motortemperatur;
+    lv_obj_t *motor_temperatur;
+    lv_obj_t *rotor_id;
+    lv_obj_t *controller_id;
+    lv_obj_t *master_id_label;
 } objects_t;
 
 extern objects_t objects;

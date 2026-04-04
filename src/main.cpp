@@ -162,6 +162,12 @@ static void SingleClickCb(void *button_handle, void *usr_data)
         lvgl_port_unlock();
         return;
     }
+    if (rotor_app_commit_id_field_on_hw_click()) {
+        lvgl_port_lock(-1);
+        LVGL_button_event((void *)(intptr_t)BUTTON_SINGLE_CLICK);
+        lvgl_port_unlock();
+        return;
+    }
     if (rotor_rs485_is_position_polling()) {
         /* Soll = Ist: Encoder-Session löschen (sonst kein taget + altes SETPOS aus rotor_app_loop) */
         const float snap = rotor_rs485_get_last_position_deg();

@@ -62,12 +62,14 @@ void rotor_rs485_set_target_callback(rotor_rs485_target_cb_t cb);
  */
 void rotor_rs485_idle_tasks(void);
 
-/** Letzte Werte aus ACK_GETANEMO / ACK_GETTEMPA / ACK_WINDDIR (auch PC-Mitlesen). */
+/** Letzte Werte aus ACK_GETANEMO / ACK_GETTEMPA / ACK_GETTEMPM / ACK_WINDDIR (auch PC-Mitlesen). */
 float rotor_rs485_get_last_wind_kmh(void);
 float rotor_rs485_get_last_tempa_c(void);
+/** Motortemperatur °C (GETTEMPM). */
+float rotor_rs485_get_last_tempm_c(void);
 /** Windrichtung 0…360° (meteorologisch, wie Slave). */
 float rotor_rs485_get_last_wind_dir_deg(void);
-/** Bit 0x1 Wind km/h, 0x2 Temp, 0x4 Windrichtung — liest aus und löscht die Maske. */
+/** Bit 0x1 Wind km/h, 0x2 Außentemp, 0x4 Windrichtung, 0x8 Motortemp — liest aus und löscht die Maske. */
 uint8_t rotor_rs485_weather_ui_take_mask(void);
 
 /** Einmal GETREF (z. B. beim Start). */

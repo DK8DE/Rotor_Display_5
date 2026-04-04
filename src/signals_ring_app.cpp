@@ -1,6 +1,6 @@
 /**
  * Ring: Homing = oranges Lauflicht; referenziert = grün, Ist-Richtung rot (LED 0 Mitte = 0°, Uhrzeigersinn).
- * Punkt (<20° Öffnung): Gauß um die Richtung; breiter Sektor: cos-Kante zum Grün.
+ * Punkt (<20° Öffnung): Gauß; breiter Sektor: cos bis half+1,5·LED-Breite, Rand gedimmt.
  * Nicht referenziert, kein Homing = gedimmtes Orange (Warnung).
  */
 
@@ -112,7 +112,12 @@ static void set_direction_red_on_green(float led_pos)
     }
 }
 
-/** Großer Öffnungswinkel: Sektor mit cos(π/2·d/half) zum Rand — weiche Kanten */
+/**
+ * Großer Öffnungswinkel: Helligkeit fällt vom Zentrum zum Rand (cos), äußere LEDs gedimmt.
+ * Geometrischer Rand ±half; limit = half + 1,5·LED-Breite (½ + 1 LED weicher Auslauf ≈ eine LED mehr sichtbar).
+ * Kein „inner = half - feather“ mehr — das schnitt z. B. bei 150° (half=75°) bei 66° ab und ließ nur
+ * 3 LED-Mitten (0…45°) hart rot, obwohl 150° ≈ 6,7 LED-Schritte (16 LEDs) sein sollen.
+ */
 static void set_direction_sector_red_on_green(float center_deg_ui, float opening_deg)
 {
     const int n = (int)s_n;
@@ -123,13 +128,14 @@ static void set_direction_sector_red_on_green(float center_deg_ui, float opening
     const float half = opening_deg * 0.5f;
     const float half_safe = (half > 1e-4f) ? half : 1e-4f;
     const float deg_per_led = 360.0f / (float)n;
+    const float limit = half_safe + 1.5f * deg_per_led;
+    const float limit_safe = (limit > 1e-4f) ? limit : 1e-4f;
     for (uint8_t j = 0; j < s_n; j++) {
         const float led_center_deg = (float)j * deg_per_led;
         const float d = angle_diff_abs_wrap(center, led_center_deg);
         float rw = 0.0f;
-        if (d <= half) {
-            const float t = d / half_safe;
-            rw = cosf(1.57079633f * t);
+        if (d <= limit_safe) {
+            rw = cosf(1.57079633f * (d / limit_safe));
         }
         set_pixel_rg(rw, j);
     }

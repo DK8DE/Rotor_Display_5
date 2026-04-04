@@ -20,6 +20,8 @@ static uint8_t s_rotor_id = 20;
 static uint16_t s_touch_beep_freq_hz = 1100;
 /** GETLSL/SETLSL — Touch-Pieps Lautstärke (0…50, wie Signals::tone) */
 static uint8_t s_touch_beep_vol = 14;
+/** GETCONANO/SETCONANO — Wetter-Tab (1) / aus (0) */
+static uint8_t s_anemometer = 1;
 
 static char s_ant_label[3][48];
 static uint8_t s_last_antenna = 1;
@@ -110,6 +112,7 @@ void pwm_config_load_defaults(void)
     s_rotor_id = 20;
     s_touch_beep_freq_hz = 1100;
     s_touch_beep_vol = 14;
+    s_anemometer = 1;
 }
 
 void pwm_config_load(void)
@@ -165,6 +168,10 @@ void pwm_config_load(void)
     if (lsl >= 0 && lsl <= 50) {
         s_touch_beep_vol = (uint8_t)lsl;
     }
+    int ano = parse_int_after_key(buf, "anemometer");
+    if (ano == 0 || ano == 1) {
+        s_anemometer = (uint8_t)ano;
+    }
 }
 
 void pwm_config_save(void)
@@ -189,10 +196,12 @@ void pwm_config_save(void)
              "  \"antenna_3_label\": \"%s\",\n"
              "  \"last_antenna\": %u,\n"
              "  \"confrq\": %u,\n"
-             "  \"lsl\": %u\n"
+             "  \"lsl\": %u,\n"
+             "  \"anemometer\": %u\n"
              "}\n",
              (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_master_id, (unsigned)s_rotor_id, e1, e2, e3,
-             (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol);
+             (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol,
+             (unsigned)s_anemometer);
     f.print(line);
     f.close();
 }
@@ -332,5 +341,17 @@ void pwm_config_set_touch_beep_vol(uint8_t vol)
 {
     if (vol <= 50u) {
         s_touch_beep_vol = vol;
+    }
+}
+
+uint8_t pwm_config_get_anemometer(void)
+{
+    return s_anemometer;
+}
+
+void pwm_config_set_anemometer(uint8_t on_0_or_1)
+{
+    if (on_0_or_1 <= 1u) {
+        s_anemometer = on_0_or_1;
     }
 }

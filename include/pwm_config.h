@@ -48,6 +48,10 @@ void pwm_config_set_touch_beep_freq_hz(uint16_t hz);
 uint8_t pwm_config_get_touch_beep_vol(void);
 void pwm_config_set_touch_beep_vol(uint8_t vol);
 
+/** Anemometer/Wetter-Tab: 1 = Wind + Außentemp + Richtung anzeigen und abfragen, 0 = Tab aus, kein GETANEMO/TEMPA/WINDDIR */
+uint8_t pwm_config_get_anemometer(void);
+void pwm_config_set_anemometer(uint8_t on_0_or_1);
+
 #ifdef __cplusplus
 }
 #endif

@@ -6,7 +6,9 @@
  * Bus-Regel: Pro Anfrage ein ausstehendes Telegramm; nächste Anfrage erst nach ACK (oder Timeout).
  * SETASELECT (DST 255): kein Pending/ACK — sofort senden.
  * SETCONIDF / SETCONTID (DST 255): neue Controller-master_id → config.json + ACK_SETCONIDF bzw. ACK_SETCONTID.
- * GETANEMO/GETTEMPA/GETWINDDIR: nur Stillstand, ohne Fremd-PC; ACKs auch bei PC-Mitlesen.
+ * GETANEMO/GETTEMPA/GETWINDDIR/GETTEMPM: nur Stillstand, ohne Fremd-PC; ACKs auch bei PC-Mitlesen.
+ * GETCONANO/SETCONANO: Anemometer/Wetter-Tab (1/0) in config.json; bei 0 kein Wetter-Polling.
+ * GETTEMPM zyklisch alle ROTOR_MOTOR_TEMP_POLL_MS (5 s); Wetter-GETs unverändert gestaffelt.
  *
  * Verbindung: Fehler 10 (Verbindungstimeout), wenn länger kein Telegramm vom Slave (SRC=Rotor-ID)
  * oder vor erster Antwort nur Timeouts — PC- oder Controller-Abfragen zählen (ROTOR_CONN_LOST_TIMEOUT_MS).
@@ -85,6 +87,11 @@ extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3);
 #define ROTOR_WEATHER_STAGGER_MS 1000u
 #endif
 
+/** GETTEMPM Motortemperatur — eigenes Intervall (5 s), unabhängig von Wetter-Rotation */
+#ifndef ROTOR_MOTOR_TEMP_POLL_MS
+#define ROTOR_MOTOR_TEMP_POLL_MS 5000u
+#endif
+
 enum class Pending : uint8_t {
     None,
     GetRef,
@@ -103,6 +110,7 @@ enum class Pending : uint8_t {
     GetAnemo,
     GetTempA,
     GetWindDir,
+    GetTempM,
     Test
 };
 
@@ -118,9 +126,10 @@ static bool s_pending_antenna_offset_notify = false;
 /** SET* config: pwm_config_save + UI (LVGL) in rotor_rs485_idle_tasks */
 static bool s_pending_config_changed_from_bus = false;
 
-/** ACK_GETANEMO / ACK_GETTEMPA / ACK_WINDDIR (Anzeige in loop(), nicht im Parser) */
+/** ACK_GETANEMO / ACK_GETTEMPA / ACK_GETTEMPM / ACK_WINDDIR (Anzeige in loop(), nicht im Parser) */
 static float s_last_wind_kmh = 0.0f;
 static float s_last_tempa_c = 0.0f;
+static float s_last_tempm_c = 0.0f;
 static float s_last_wind_dir_deg = 0.0f;
 static uint8_t s_weather_dirty_mask = 0;
 
@@ -196,6 +205,7 @@ static uint32_t s_next_conn_recovery_getref_ms = 0;
 /** Nächster Wetter-GET (nur ohne PC, Stillstand); 0=ANEMO, 1=TEMPA, 2=WINDDIR */
 static uint32_t s_next_weather_ms = 0;
 static uint8_t s_weather_phase = 0;
+static uint32_t s_next_motortemp_ms = 0;
 
 /** Direkt nach Einschalten: 3× TEST (Ping); ohne ACK nach 3 Versuchen → Fehler 10 */
 static bool s_boot_test_done = false;
@@ -256,6 +266,11 @@ float rotor_rs485_get_last_wind_kmh(void)
 float rotor_rs485_get_last_tempa_c(void)
 {
     return s_last_tempa_c;
+}
+
+float rotor_rs485_get_last_tempm_c(void)
+{
+    return s_last_tempm_c;
 }
 
 float rotor_rs485_get_last_wind_dir_deg(void)
@@ -505,7 +520,7 @@ bool rotor_rs485_send_stop(void)
     }
     if (s_pending == Pending::GetPosDg || s_pending == Pending::GetRef ||
         s_pending == Pending::GetAnemo || s_pending == Pending::GetTempA ||
-        s_pending == Pending::GetWindDir) {
+        s_pending == Pending::GetWindDir || s_pending == Pending::GetTempM) {
         clear_pending();
     }
     if (s_pending != Pending::None) {
@@ -549,7 +564,7 @@ bool rotor_rs485_send_set_pwm_limit(uint8_t pct)
         clear_pending();
     }
     if (s_pending == Pending::GetAnemo || s_pending == Pending::GetTempA ||
-        s_pending == Pending::GetWindDir) {
+        s_pending == Pending::GetWindDir || s_pending == Pending::GetTempM) {
         clear_pending();
     }
     if (s_pending == Pending::GetAntOff1 || s_pending == Pending::GetAntOff2 ||
@@ -579,7 +594,7 @@ bool rotor_rs485_goto_degrees(float deg)
         clear_pending();
     }
     if (s_pending == Pending::GetAnemo || s_pending == Pending::GetTempA ||
-        s_pending == Pending::GetWindDir) {
+        s_pending == Pending::GetWindDir || s_pending == Pending::GetTempM) {
         clear_pending();
     }
     if (s_pending == Pending::GetAntOff1 || s_pending == Pending::GetAntOff2 ||
@@ -711,6 +726,20 @@ static bool parse_ack_winddir(const char *line)
     }
     s_last_wind_dir_deg = normalize_deg_0_360(v);
     s_weather_dirty_mask |= 4u;
+    return true;
+}
+
+static bool parse_ack_gettempm(const char *line)
+{
+    float v = 0.0f;
+    if (!parse_ack_first_param_float(line, ":ACK_GETTEMPM:", &v)) {
+        return false;
+    }
+    if (s_pending == Pending::GetTempM) {
+        clear_pending();
+    }
+    s_last_tempm_c = v;
+    s_weather_dirty_mask |= 8u;
     return true;
 }
 
@@ -1139,6 +1168,32 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
         return true;
     }
 
+    if (strstr(line, ":GETCONANO:")) {
+        if (!CFG_TRY_TAG(":GETCONANO:")) {
+            config_reply_nak(src, "NAK_GETCONANO", 2);
+            return true;
+        }
+        config_reply_ack_u8(src, "ACK_GETCONANO", pwm_config_get_anemometer());
+        return true;
+    }
+
+    if (strstr(line, ":SETCONANO:")) {
+        if (!CFG_TRY_TAG(":SETCONANO:")) {
+            config_reply_nak(src, "NAK_SETCONANO", 2);
+            return true;
+        }
+        unsigned v = 0;
+        if (sscanf(par, "%u", &v) != 1 || v > 1u) {
+            config_reply_nak(src, "NAK_SETCONANO", 1);
+            return true;
+        }
+        pwm_config_set_anemometer((uint8_t)v);
+        pwm_config_save();
+        s_pending_config_changed_from_bus = true;
+        config_reply_ack_u8(src, "ACK_SETCONANO", pwm_config_get_anemometer());
+        return true;
+    }
+
     static const struct {
         const char *get_tag;
         const char *set_tag;
@@ -1228,6 +1283,7 @@ static void on_ack_timeout()
         case Pending::GetAnemo:
         case Pending::GetTempA:
         case Pending::GetWindDir:
+        case Pending::GetTempM:
         case Pending::GetAngle1:
         case Pending::GetAngle2:
         case Pending::GetAngle3:
@@ -1296,6 +1352,9 @@ static void on_ack_timeout()
         break;
     case Pending::GetWindDir:
         send_request("GETWINDDIR", "0", Pending::GetWindDir);
+        break;
+    case Pending::GetTempM:
+        send_request("GETTEMPM", "0", Pending::GetTempM);
         break;
     case Pending::Test:
         s_boot_test_timeout_count++;
@@ -1793,6 +1852,10 @@ static bool parse_nak_and_clear(const char *line)
         clear_pending();
         return true;
     }
+    if (strstr(line, ":NAK_GETTEMPM:") && s_pending == Pending::GetTempM) {
+        clear_pending();
+        return true;
+    }
     return false;
 }
 
@@ -1941,6 +2004,9 @@ static void process_complete_line(const char *line, size_t len)
         if (parse_ack_gettempa(line)) {
             return;
         }
+        if (parse_ack_gettempm(line)) {
+            return;
+        }
         if (parse_ack_winddir(line)) {
             return;
         }
@@ -2017,6 +2083,7 @@ void rotor_rs485_init(void)
     s_antenna_boot_phase = 0;
     s_next_weather_ms = millis() + 2000u;
     s_weather_phase = 0;
+    s_next_motortemp_ms = millis() + 2000u;
 }
 
 /** Erstes Paket nach Einschalten: TEST (Ping), 3 Versuche ohne ACK → Fehler 10 */
@@ -2075,6 +2142,9 @@ static void try_antenna_boot_first_get(void)
 /** GETANEMO / GETTEMPA / GETWINDDIR nur ohne Fremd-PC, Stillstand (kein Homing-/Positions-Polling). */
 static void try_weather_poll(void)
 {
+    if (pwm_config_get_anemometer() == 0) {
+        return;
+    }
     if (!s_boot_done || s_poll_pos || s_poll_ref) {
         return;
     }
@@ -2100,6 +2170,25 @@ static void try_weather_poll(void)
     }
     s_weather_phase = (uint8_t)((s_weather_phase + 1u) % 3u);
     s_next_weather_ms = millis() + ROTOR_WEATHER_STAGGER_MS;
+}
+
+/** GETTEMPM alle ROTOR_MOTOR_TEMP_POLL_MS; gleiche Stillstands-/Boot-Sperren wie Wetter. */
+static void try_motor_temp_poll(void)
+{
+    if (!s_boot_done || s_poll_pos || s_poll_ref) {
+        return;
+    }
+    if (s_antenna_boot_pending && s_antenna_boot_phase != 0) {
+        return;
+    }
+    if (s_angle_boot_pending && s_angle_boot_phase != 0) {
+        return;
+    }
+    if ((int32_t)(millis() - s_next_motortemp_ms) < 0) {
+        return;
+    }
+    send_request("GETTEMPM", "0", Pending::GetTempM);
+    s_next_motortemp_ms = millis() + ROTOR_MOTOR_TEMP_POLL_MS;
 }
 
 void rotor_rs485_loop(void)
@@ -2203,4 +2292,7 @@ void rotor_rs485_loop(void)
     }
 
     try_weather_poll();
+    if (s_pending == Pending::None) {
+        try_motor_temp_poll();
+    }
 }
