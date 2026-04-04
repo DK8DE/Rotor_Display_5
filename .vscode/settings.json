@@ -3,10 +3,11 @@
   "C_Cpp.errorSquiggles": "disabled",
   "clangd.arguments": [
     "--background-index",
-    "--query-driver=${env:USERPROFILE}/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-gcc*",
+    "--query-driver=C:\\Users\\DK8DE\\.platformio\\packages\\toolchain-*\\bin\\*,C:\\Users\\DK8DE\\.platformio\\packages\\tool-*\\bin\\*",
     "--query-driver=${env:USERPROFILE}/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-g++*",
     "--query-driver=**/xtensa-esp32s3-elf-gcc*",
-    "--query-driver=**/xtensa-esp32s3-elf-g++*"
+    "--query-driver=**/xtensa-esp32s3-elf-g++*",
+    "--compile-commands-dir=d:\\Rotor\\Rotor_Display_5"
   ],
   "clangd.fallbackFlags": []
 }

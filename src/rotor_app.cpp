@@ -29,6 +29,8 @@ static int16_t s_pfeil_wind_eez_base_angle01 = 0;
 static bool s_arc_dragging = false;
 /** Zwischen PRESSED und RELEASED: mindestens ein VALUE_CHANGED (echter Dreh am Arc)? */
 static bool s_arc_moved_this_press = false;
+/** lv_arc_get_value beim Drücken — falls VALUE_CHANGED ausbleibt, Loslassen trotzdem als Dreh erkennen */
+static int s_arc_value_at_press = 0;
 static bool s_arc_updating = false;
 /** Encoder: Soll einstellen, Ist-Nachführung am Arc aus */
 static bool s_encoder_adjusting = false;
@@ -738,6 +740,7 @@ static void on_arc(lv_event_t *e)
     if (c == LV_EVENT_PRESSED) {
         s_arc_dragging = true;
         s_arc_moved_this_press = false;
+        s_arc_value_at_press = lv_arc_get_value(arc);
         /* Encoder-Session hier NICHT abbrechen: kurzer Touch ohne Drehen soll keine Klicks „verschlucken“
          * und kein ausstehendes SETPOSDG verwerfen — erst bei echtem Drag (VALUE_CHANGED). */
     }
@@ -769,18 +772,19 @@ static void on_arc(lv_event_t *e)
     }
     if (c == LV_EVENT_RELEASED) {
         s_arc_dragging = false;
-        if (s_arc_updating) {
-            return;
-        }
+        /* Pieps immer beim Loslassen (Arc-Callback nur bei Touch auf dem Arc) — nicht hinter
+         * s_arc_updating verstecken: sonst kein Ton und kein GOTO, wenn zufällig Flag noch stand. */
         touch_feedback_arc_release();
         if (rotor_error_app_is_fault_locked()) {
             return;
         }
+        const int target_v = lv_arc_get_value(arc);
+        /* VALUE_CHANGED fehlt manchmal (kurzer Zug, gleicher ganzzahliger Grad, Coalescing) — Abgleich Wert Press/Release. */
+        const bool moved = s_arc_moved_this_press || (target_v != s_arc_value_at_press);
         /* Nur nach echtem Drehen: GOTO — sonst (Finger kurz auf Arc) Encoder/Bus nicht mit Arc-Wert überschreiben. */
-        if (!s_arc_moved_this_press) {
+        if (!moved) {
             return;
         }
-        const int target_v = lv_arc_get_value(arc);
         const float bus_tgt = arc_int_value_to_bus_deg(target_v);
         char buf[16];
         fmt_taget_from_display_deg(buf, sizeof(buf), bus_to_display(bus_tgt));

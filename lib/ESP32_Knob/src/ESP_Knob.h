@@ -153,18 +153,24 @@ public:
     void detachZeroEventCallback(void);
 
     /**
-     * @brief Beschleunigung bei schnellem Drehen (kurze Zeit zwischen Rastern, gleiche Richtung).
-     * Der Left/Right-Callback wird pro physischer Raste bis zu max_multiplier-mal aufgerufen
-     * (analog zu „mehr Schritte“ bei schneller PCNT-Folge).
+     * @brief Beschleunigung bei schnellem Drehen (kurze Zeit zwischen zwei Rasten, gleiche Richtung).
+     * Langsam (Abstand ≥ threshold_us oder nach Pause): genau 1× Callback pro Raste.
+     * Schnell: bis zu max_multiplier Aufrufe pro physischer Raste — quadratische Kennlinie:
+     * je kürzer das Zeitfenster zwischen den Rasten, desto stärker der Zusatz (wie UltraEncoder).
      *
-     * @param accel_percent 0 = aus, 1–100 Stärke der Hochskalierung
-     * @param threshold_us Wenn Abstand zwischen zwei Events kleiner als dieser Wert ist, wird skaliert (z. B. 70 ms = 70000)
-     * @param max_multiplier Obergrenze (2–16), z. B. 4 → bis zu 4× Callback pro Raste
+     * @param accel_percent 0 = aus, 1–100 Stärke (100 = volle Nutzung bis max_multiplier)
+     * @param threshold_us Obergrenze in µs: liegt dt darunter, gilt die Raste als „schnell“ (z. B. 50 ms = 50000)
+     * @param max_multiplier Obergrenze 2–32 (z. B. 24 → bis zu 24 virtuelle Schritte pro Raste bei sehr schnellem Drehen)
      */
     void setAcceleration(uint8_t accel_percent, uint32_t threshold_us, uint8_t max_multiplier);
 
     /**
-     * @brief Nach längerer Pause (Standard 200 ms) gilt die nächste Raste wieder als „langsam“ (1×).
+     * @brief Kennlinie: quadratisch (Standard, aggressiver bei sehr schnellem Drehen) oder linear (flacher Anstieg).
+     */
+    void setAccelerationCurveQuadratic(bool quadratic);
+
+    /**
+     * @brief Nach längerer Pause gilt die nächste Raste wieder als „langsam“ (1×). Standard 200 ms.
      */
     void setAccelerationIdleResetUs(uint32_t idle_us);
 
@@ -181,7 +187,8 @@ private:
     uint8_t _accel_percent;           /*!< 0 = Beschleunigung aus */
     uint32_t _accel_threshold_us;     /*!< Unterhalb: schnelle Folge */
     uint32_t _accel_idle_reset_us;    /*!< Darüber: neue langsame Raste */
-    uint8_t _accel_max_mult;          /*!< 1–16 */
+    uint8_t _accel_max_mult;          /*!< 2–32 */
+    bool _accel_quadratic_curve;     /*!< true: (dt/th)^2, false: linear */
     uint64_t _accel_last_event_us;
     int8_t _accel_last_direction;     /*!< -1 links, +1 rechts, 0 = noch kein Event */
 

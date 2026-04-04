@@ -305,8 +305,10 @@ void setup()
     Serial.println("Initialize ESP32_Knob (A=GPIO5 B=GPIO6, Pending in loop)");
     s_encoder_knob = new ESP_Knob(GPIO_NUM_KNOB_PIN_A, GPIO_NUM_KNOB_PIN_B);
     s_encoder_knob->begin();
-    /* Schnelles Drehen: mehr virtuelle Rasten (Callback mehrfach) — wie PCNT mit dichter Schrittfolge */
-    s_encoder_knob->setAcceleration(80, 70 * 1000, 4);
+    /* Beschleunigung: langsam 1 Schritt/Raste; sehr schnell bis zu 24 virtuelle Schritte/Raste (quadratische Kennlinie).
+     * threshold 50 ms: kürzerer Abstand → mehr Boost; Stärke 100 %; nach 150 ms Pause wieder 1×. */
+    s_encoder_knob->setAcceleration(100, 50 * 1000, 24);
+    s_encoder_knob->setAccelerationIdleResetUs(150 * 1000);
     s_encoder_knob->setEventUserDate(nullptr);
     s_encoder_knob->attachRightEventCallback([](int, void *) {
         encoder_knob_apply_detent(+1);

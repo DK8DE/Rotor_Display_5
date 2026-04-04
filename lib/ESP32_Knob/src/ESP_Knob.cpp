@@ -22,6 +22,7 @@ ESP_Knob::ESP_Knob(int gpio_encoder_a, int gpio_encoder_b):
     _accel_threshold_us(70000),
     _accel_idle_reset_us(200000),
     _accel_max_mult(4),
+    _accel_quadratic_curve(true),
     _accel_last_event_us(0),
     _accel_last_direction(0),
     _event_data({this, NULL})
@@ -88,10 +89,15 @@ void ESP_Knob::setAcceleration(uint8_t accel_percent, uint32_t threshold_us, uin
     if (max_multiplier < 1U) {
         max_multiplier = 1;
     }
-    if (max_multiplier > 16U) {
-        max_multiplier = 16;
+    if (max_multiplier > 32U) {
+        max_multiplier = 32;
     }
     _accel_max_mult = max_multiplier;
+}
+
+void ESP_Knob::setAccelerationCurveQuadratic(bool quadratic)
+{
+    _accel_quadratic_curve = quadratic;
 }
 
 void ESP_Knob::setAccelerationIdleResetUs(uint32_t idle_us)
@@ -121,10 +127,16 @@ int ESP_Knob::computeAccelSteps(int8_t direction)
         if (dt > static_cast<uint64_t>(_accel_idle_reset_us)) {
             steps = 1;
         } else if (dt < static_cast<uint64_t>(_accel_threshold_us)) {
-            const uint64_t span = static_cast<uint64_t>(_accel_threshold_us) - dt;
-            const uint64_t numer = span * static_cast<uint64_t>(_accel_max_mult - 1U);
-            uint32_t extra = static_cast<uint32_t>(numer / static_cast<uint64_t>(_accel_threshold_us));
-            extra = (extra * static_cast<uint32_t>(_accel_percent)) / 100U;
+            const uint64_t th = static_cast<uint64_t>(_accel_threshold_us);
+            const uint64_t span = th - dt;
+            uint64_t extra64 = 0;
+            if (_accel_quadratic_curve) {
+                /* extra = (max-1) * (span/th)^2 * percent/100 — bei dt→0 nahe max, bei langsamem Fast-Drehen weniger */
+                extra64 = static_cast<uint64_t>(_accel_max_mult - 1U) * span * span / (th * th);
+            } else {
+                extra64 = static_cast<uint64_t>(_accel_max_mult - 1U) * span / th;
+            }
+            uint32_t extra = static_cast<uint32_t>((extra64 * static_cast<uint64_t>(_accel_percent)) / 100ULL);
             steps = 1 + static_cast<int>(extra);
             if (steps > static_cast<int>(_accel_max_mult)) {
                 steps = static_cast<int>(_accel_max_mult);
