@@ -880,7 +880,7 @@
 <p>Diese Befehle richten sich <b>nicht</b> an den Rotor‑Slave (Antrieb), sondern an den <b>Display‑/Hardware‑Controller</b> (ESP32 mit UI). Zieladresse <code>DST</code> ist die im Gerät konfigurierte <b>Master‑ID</b> des Controllers (entspricht <code>master_id</code> in <code>config.json</code> auf der FFat‑Partition). <code>SRC</code> ist die ID des sendenden Clients (z.&nbsp;B. PC‑Software).</p>
 <p><b>Beispiel</b> (PC <code>SRC = 1</code>, Controller <code>master_id = 2</code>, GET‑Parameter <code>0</code>): Anfrage <code>#1:2:GETCONTID:0:3$</code> — Checksumme <code>3 = 1 + 2 + 0</code>. Antwort vom Controller (nicht vom Rotor): <code>#2:1:ACK_GETCONTID:&lt;Wert&gt;:…$</code>. <span class="muted">Falsch wäre <code>#1:20:GETCONTID:0:21$</code> — das trifft den Rotor mit ID&nbsp;20.</span></p>
 <p>Die gleichen Telegramme können über <b>USB‑Seriell</b> und über <b>RS485</b> eingehen; Antworten (<code>ACK_*</code>/<code>NAK_*</code>) gehen über <code>hw_send</code> ebenfalls auf den Bus <b>und</b> zum USB‑Monitor (Spiegelung). Checksumme <code>CS</code> wie gewohnt: <code>SRC + DST + letzter Zahlenwert in PARAMS</code> (siehe Abschnitt&nbsp;1).</p>
-<p>Schreibbefehle speichern in <code>config.json</code> (Slow/Fast‑PWM, IDs, Antennen‑Labels u.&nbsp;a.); die UI wird danach aktualisiert (u.&nbsp;a. Labels, RS485‑IDs, Slow/Fast‑<code>SETPWM</code> zum Rotor).</p>
+<p>Schreibbefehle speichern in <code>config.json</code> (Slow/Fast‑PWM, IDs, Antennen‑Labels, Touch‑Pieps, Anemometer, Encoder‑Schritt, Antennenwechsel‑Verhalten <code>concha</code> u.&nbsp;a.); die UI wird danach aktualisiert (u.&nbsp;a. Labels, RS485‑IDs, Slow/Fast‑<code>SETPWM</code> zum Rotor).</p>
 
 <table>
 <tr><th>Befehl</th><th>Antwort</th></tr>
@@ -928,7 +928,21 @@
 <td><code>GETLSL</code> / <code>SETLSL</code></td>
 <td><code>ACK_GETLSL</code> / <code>ACK_SETLSL</code> — Touch‑Pieps‑Lautstärke 0…50 (wie <code>Signals::tone</code>), in <code>config.json</code> als <code>lsl</code>.</td>
 </tr>
+<tr>
+<td><code>GETCONANO</code> / <code>SETCONANO</code></td>
+<td><code>ACK_GETCONANO</code> / <code>ACK_SETCONANO</code> (bzw. <code>NAK_SETCONANO</code>) — Anemometer/Wetter‑Tab: <code>1</code> = Wind, Außentemperatur und Windrichtung im Wetter‑Tab; <code>0</code> = Wetter‑Tab aus, <code>GETTEMPA</code> für Außentemp (Rotor_Info) bleibt. JSON <code>anemometer</code>.</td>
+</tr>
+<tr>
+<td><code>GETCONDELTA</code> / <code>SETCONDELTA</code></td>
+<td><code>ACK_GETCONDELTA</code> / <code>ACK_SETCONDELTA</code> (bzw. <code>NAK_SETCONDELTA</code>) — Encoder‑Schritt pro Raste: <code>1</code> oder <code>10</code> Zehntelgrad (0,1° bzw. 1° pro Klick). JSON <code>encoder_delta</code>.</td>
+</tr>
+<tr>
+<td><code>GETCONCHA</code> / <code>SETCONCHA</code></td>
+<td><code>ACK_GETCONCHA</code> / <code>ACK_SETCONCHA</code> (bzw. <code>NAK_SETCONCHA</code>) — Verhalten beim Antennenwechsel: <code>1</code> = Anzeige‑Soll (<code>taget</code>) beibehalten, <code>SETPOSDG</code> mit neuer Antennen‑Geometrie; <code>0</code> = <code>taget</code> auf die aktuelle Ist‑Anzeige (Kompass) setzen, kein zusätzliches SETPOS. JSON <code>concha</code>.</td>
+</tr>
 </table>
+
+<div class="note"><b>Pflege (Firmware):</b> Neue Konfig‑Befehle für den Display‑Controller bitte in <code>src/rotor_rs485.cpp</code> (<code>handle_local_config_command</code>), in <code>include/pwm_config.h</code> / <code>src/pwm_config.cpp</code> / <code>data/config.json</code> und <b>in dieser Tabelle</b> parallel ergänzen.</div>
 
 <div class="note"><b>NAK‑Codes (typisch):</b> <code>1</code> = ungültiger Wertebereich oder verbotenes Zeichen im Namen; <code>2</code> = Checksumme/Format passt nicht.</div>
 <p class="muted"><b>GET‑Anfragen</b> verwenden wie üblich z.&nbsp;B. <code>PARAMS = 0</code> (letzter Zahlenwert für die CS‑Bildung).</p>

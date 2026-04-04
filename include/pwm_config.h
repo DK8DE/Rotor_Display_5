@@ -48,9 +48,20 @@ void pwm_config_set_touch_beep_freq_hz(uint16_t hz);
 uint8_t pwm_config_get_touch_beep_vol(void);
 void pwm_config_set_touch_beep_vol(uint8_t vol);
 
-/** Anemometer/Wetter-Tab: 1 = Wind + Außentemp + Richtung anzeigen und abfragen, 0 = Tab aus, kein GETANEMO/TEMPA/WINDDIR */
+/** Anemometer/Wetter-Tab: 1 = Wind + Außentemp + Richtung im Wetter-Tab; 0 = Wetter-Tab aus, GETTEMPA für Außentemp (Rotor_Info) bleibt */
 uint8_t pwm_config_get_anemometer(void);
 void pwm_config_set_anemometer(uint8_t on_0_or_1);
+
+/** Encoder-Schritt in Zehntelgrad: 1 = 0,1°/Raste, 10 = 1°/Raste (GETCONDELTA/SETCONDELTA) */
+uint8_t pwm_config_get_encoder_delta_tenths(void);
+void pwm_config_set_encoder_delta_tenths(uint8_t tenths_1_or_10);
+
+/**
+ * Antennenwechsel (GETCONCHA/SETCONCHA, JSON concha): 1 = Anzeige-Soll (taget) beibehalten, SETPOS für neue
+ * Geometrie; 0 = taget auf aktuelle Ist-Anzeige (Kompass) setzen, kein zusätzliches SETPOS.
+ */
+uint8_t pwm_config_get_concha(void);
+void pwm_config_set_concha(uint8_t zero_or_one);
 
 #ifdef __cplusplus
 }

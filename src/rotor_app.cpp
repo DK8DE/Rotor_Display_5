@@ -43,12 +43,16 @@ static uint32_t s_last_encoder_step_ms = 0;
 static float s_encoder_target_deg = 0.0f;
 /** Encoder: Zehntelgrad 0..3599 (±1 pro Klick = ±0,1°); Arc 0..360 = 1°-Schritte */
 static int s_encoder_tenths = 0;
+/** Nur Arc: letzter lv_arc_set_value-Integer — gleicher Wert → kein erneutes grad_acc_sync (Hot-Path). */
+static int s_encoder_arc_int_cached = -32768;
+/** Nach Antennenwechsel: on_target_deg filtert Bus-Soll-Echos, die noch zum alten Geometrie-/Slave-Soll passen. */
+static uint32_t s_taget_ignore_bus_target_until_ms = 0;
 static constexpr uint32_t ENCODER_BUS_RETRY_MS = 50;
 /** Pause ohne neuen Tick bis SETPOS. War 1400 ms (langsam drehen); Ziel: ~1/3 für schnellere Busreaktion,
  *  Fallback Session-Start nutzt s_encoder_target_deg (kein Arc-1°-Verlust) bleibt aktiv. */
 static constexpr uint32_t ENCODER_SEND_IDLE_MS = 670;
-/** false (Test): Encoder ändert nur Soll-Text + Bus, Arc bleibt; true: Arc folgt dem Encoder wie bisher */
-static constexpr bool ENCODER_MOVES_ARC = false;
+/** true: wie Touch am Arc — Drehen zeigt Soll am Arc; vor SETPOSDG Arc auf Ist (Startlage), dann Fahrt */
+static constexpr bool ENCODER_MOVES_ARC = true;
 
 /** Tab Rotor_Info: Encoder/Tippen nur Vorschau; Flash nur per HW-Taster und nur bei geänderter Zahl */
 enum class IdFieldFocus : uint8_t { None = 0, RotorId, ControllerId };
@@ -127,6 +131,7 @@ extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3)
     }
     pwm_config_set_last_antenna(n_1_to_3);
     pwm_config_save();
+    rotor_rs485_send_setaselect(n_1_to_3);
     lvgl_port_lock(-1);
     antenna_apply_style(n_1_to_3);
     rotor_app_antenna_offset_changed();
@@ -151,8 +156,8 @@ static void on_antenna_btn(lv_event_t *e)
     pwm_config_set_last_antenna(n);
     pwm_config_save();
     antenna_apply_style(n);
-    rotor_app_antenna_offset_changed();
     rotor_rs485_send_setaselect(n);
+    rotor_app_antenna_offset_changed();
 }
 
 /** hauptanzeige: Tab 0…4 = Position, Fast, Antennen, Temperaturen_Wind, Rotor_Info */
@@ -183,6 +188,32 @@ static void apply_anemometer_weather_tab_visibility(void)
         }
     }
     lv_obj_invalidate(tv);
+}
+
+/** Beschriftung auf encoder_delta_bu (Label-Kind): aktive Schrittweite */
+static void encoder_delta_apply_button_label(void)
+{
+    if (!objects.encoder_delta_lable) {
+        return;
+    }
+    const uint8_t d = pwm_config_get_encoder_delta_tenths();
+    const char *txt = (d >= 10u) ? "1 Grad" : "0,1 Grad";
+    lv_label_set_text(objects.encoder_delta_lable, txt);
+}
+
+static void on_encoder_delta_btn(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
+    if (rotor_error_app_is_fault_locked()) {
+        return;
+    }
+    const uint8_t cur = pwm_config_get_encoder_delta_tenths();
+    const uint8_t next = (cur >= 10u) ? 1u : 10u;
+    pwm_config_set_encoder_delta_tenths(next);
+    pwm_config_save();
+    encoder_delta_apply_button_label();
 }
 
 static void antenna_apply_labels_from_config(void)
@@ -372,6 +403,7 @@ extern "C" void rotor_app_config_changed_from_bus(void)
     rotor_rs485_set_slave_id(pwm_config_get_rotor_id());
     id_fields_sync_textareas_from_config();
     apply_anemometer_weather_tab_visibility();
+    encoder_delta_apply_button_label();
     const uint8_t p = s_pwm_ui_is_fast ? pwm_config_get_fast() : pwm_config_get_slow();
     if (!rotor_rs485_send_set_pwm_limit(p)) {
         s_pwm_deferred = p;
@@ -570,8 +602,10 @@ static void fmt_taget_from_display_deg(char *buf, size_t n, float deg)
  * Kein lv_textarea_set_cursor_pos(LAST): bei gleicher Cursor-Länge early-exit in LVGL v8 ohne
  * refr_cursor_area → fehlender Redraw bei nur geänderter Nachkommastelle (Komma-Text).
  * lv_refr_now(NULL): Refresh sofort, nicht erst beim nächsten lv_timer_handler-Slot.
+ * Encoder: sync_full_refr_now=false — kein synchrones Voll-Rendering; LVGL-Task zeichnet asynchron
+ * (sonst blockiert loop() bei schnellem Drehen trotz Bündelung).
  */
-static void taget_dg_set_display_text(const char *buf)
+static void taget_dg_set_display_text(const char *buf, bool sync_full_refr_now = true)
 {
     if (!objects.taget_dg || !buf) {
         return;
@@ -588,7 +622,9 @@ static void taget_dg_set_display_text(const char *buf)
     }
     lv_obj_invalidate(lab);
     lv_obj_invalidate(objects.taget_dg);
-    lv_refr_now(nullptr);
+    if (sync_full_refr_now) {
+        lv_refr_now(nullptr);
+    }
 }
 
 /** RS485-Pfad darf nicht direkt lvgl_port_lock + Label setzen (WDT/Deadlock mit LVGL-Task). */
@@ -619,6 +655,23 @@ static void on_target_deg(float bus_deg)
     /* loop(): serial_bridge/RS485 vor encoder_process_pending — alter Bus-Soll sonst vor dem Encoder-Tick. */
     if (rotor_encoder_pending_detents() != 0) {
         return;
+    }
+    /* Kurz nach Antennenwechsel: Slave meldet noch den alten Bus-Soll — mit neuem Versatz falsch in Anzeige;
+     * erst Echo zum neuen SETPOSDG (gleicher Anzeige-Soll wie s_encoder_tenths) anwenden. */
+    if (millis() < s_taget_ignore_bus_target_until_ms) {
+        const float disp_probe = bus_to_display(bus_deg);
+        const int incoming_t = wrap_tenths_deg(static_cast<int>(
+            std::floor(static_cast<double>(disp_probe) * 10.0 + 1e-4)));
+        int d = incoming_t - s_encoder_tenths;
+        if (d > 1800) {
+            d -= 3600;
+        }
+        if (d < -1800) {
+            d += 3600;
+        }
+        if (d > 2 || d < -2) {
+            return;
+        }
     }
     const float disp = bus_to_display(bus_deg);
     /* 0,1°/Klick: Slave/Bus melden Soll oft eine Zehntelstufe hinter der UI (Rundung).
@@ -675,17 +728,6 @@ static void on_position_deg(float bus_deg_ui)
         grad_acc_sync_mechanical(bus_deg_ui);
     }
     lvgl_port_unlock();
-}
-
-static void on_ref_button(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
-        return;
-    }
-    if (rotor_error_app_is_fault_locked()) {
-        return;
-    }
-    rotor_rs485_send_setref_homing();
 }
 
 static void on_arc(lv_event_t *e)
@@ -763,9 +805,6 @@ extern "C" void rotor_app_init(void)
     if (objects.homing_led) {
         lv_led_set_color(objects.homing_led, lv_color_hex(0xff0000));
     }
-    if (objects.ref) {
-        lv_obj_add_event_cb(objects.ref, on_ref_button, LV_EVENT_CLICKED, nullptr);
-    }
     if (objects.grad_acc) {
         lv_obj_add_event_cb(objects.grad_acc, on_arc, LV_EVENT_ALL, nullptr);
         /* Arc-Knauf (Zeiger-Punkt): rot — nur Laufzeit, keine Änderung in ui/screens.c */
@@ -779,6 +818,10 @@ extern "C" void rotor_app_init(void)
     if (objects.fast) {
         lv_obj_add_event_cb(objects.fast, on_fast_btn, LV_EVENT_CLICKED, nullptr);
     }
+    if (objects.encoder_delta_bu) {
+        lv_obj_add_event_cb(objects.encoder_delta_bu, on_encoder_delta_btn, LV_EVENT_CLICKED, nullptr);
+    }
+    encoder_delta_apply_button_label();
     antenna_apply_labels_from_config();
     antenna_apply_style(pwm_config_get_last_antenna());
     if (objects.antenna_1) {
@@ -864,6 +907,7 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
 
     /* Session-Start: Zehntel aus taget_dg; sonst letzter Soll (s_encoder_target_deg), nicht Arc — Arc ist nur 1°. */
     if (!s_encoder_adjusting) {
+        s_encoder_arc_int_cached = -32768;
         int parsed = 0;
         if (parse_taget_text_to_tenths(&parsed)) {
             s_encoder_tenths = parsed;
@@ -878,13 +922,18 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
     s_encoder_tenths = wrap_tenths_deg(s_encoder_tenths + delta_tenths);
 
     const float deg = static_cast<float>(s_encoder_tenths) / 10.0f;
-    if (ENCODER_MOVES_ARC) {
-        grad_acc_sync_mechanical(display_to_bus(deg));
+    if (ENCODER_MOVES_ARC && objects.grad_acc) {
+        const float bus_deg = display_to_bus(deg);
+        const int arc_int = deg_to_arc_value(bus_deg);
+        if (arc_int != s_encoder_arc_int_cached) {
+            grad_acc_sync_mechanical(bus_deg);
+            s_encoder_arc_int_cached = arc_int;
+        }
     }
 
     char buf[16];
     fmt_taget_from_wrapped_tenths(buf, sizeof(buf), s_encoder_tenths);
-    taget_dg_set_display_text(buf);
+    taget_dg_set_display_text(buf, false);
 
     lvgl_port_unlock();
 
@@ -897,14 +946,64 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
     s_last_encoder_step_ms = millis();
 }
 
+extern "C" bool rotor_app_encoder_id_field_focused(void)
+{
+    return s_id_field_focus != IdFieldFocus::None;
+}
+
 extern "C" void rotor_app_antenna_offset_changed(void)
 {
     on_position_deg(s_last_bus_ist_deg);
+
+    if (rotor_error_app_is_fault_locked()) {
+        return;
+    }
+    if (!rotor_rs485_is_referenced()) {
+        return;
+    }
+    if (!objects.taget_dg) {
+        return;
+    }
+
+    if (pwm_config_get_concha() == 0) {
+        /* taget = aktuelle Ist-Anzeige (Kompass) für die gewählte Antenne — kein SETPOS */
+        s_taget_ignore_bus_target_until_ms = 0;
+        const float disp = bus_to_display(s_last_bus_ist_deg);
+        s_encoder_target_deg = disp;
+        s_encoder_tenths = wrap_tenths_deg(
+            static_cast<int>(std::floor(static_cast<double>(disp) * 10.0 + 1e-4)));
+        lvgl_port_lock(-1);
+        char buf[16];
+        fmt_taget_from_display_deg(buf, sizeof(buf), disp);
+        taget_dg_set_display_text(buf);
+        lvgl_port_unlock();
+        s_encoder_adjusting = false;
+        s_encoder_goto_retry_pending = false;
+        s_encoder_retry_deadline_ms = 0;
+        s_encoder_idle_deadline_ms = 0;
+        return;
+    }
+
+    /* concha 1: Anzeige-Soll (Kompass) bleibt; SETPOS für neue Antennen-Geometrie */
+    s_taget_ignore_bus_target_until_ms = millis() + 2000;
+
+    lvgl_port_lock(-1);
+    char buf[16];
+    fmt_taget_from_wrapped_tenths(buf, sizeof(buf), s_encoder_tenths);
+    taget_dg_set_display_text(buf);
+    lvgl_port_unlock();
+
+    s_encoder_adjusting = false;
+    s_encoder_goto_retry_pending = false;
+    s_encoder_retry_deadline_ms = 0;
+    s_encoder_idle_deadline_ms = 0;
+
+    (void)encoder_apply_goto(s_encoder_target_deg);
 }
 
 /**
- * Wind/Außentemp/Windrichtung nur bei anemometer=1; Motortemp (Bit 0x8) immer.
- * Werte im Parser; UI hier in loop() (nicht im Parser / kein lv_async).
+ * Außentemp (ACK_GETTEMPA): immer Tab Rotor_Info (aussen_temperatur); Wetter-Tab (temperature) nur bei anemometer=1.
+ * Wind nur bei anemometer=1; Motortemp (Bit 0x8) immer.
  */
 extern "C" void rotor_app_weather_ui_poll(void)
 {
@@ -930,9 +1029,12 @@ extern "C" void rotor_app_weather_ui_poll(void)
             lv_textarea_set_text(objects.wind_speed, buf);
         }
     }
-    if (ano && (m & 2u)) {
+    if (m & 2u) {
         fmt_de(buf, sizeof(buf), t);
-        if (objects.temperature) {
+        if (objects.aussen_temperatur) {
+            lv_textarea_set_text(objects.aussen_temperatur, buf);
+        }
+        if (ano && objects.temperature) {
             lv_textarea_set_text(objects.temperature, buf);
         }
     }

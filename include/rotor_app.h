@@ -30,6 +30,9 @@ float rotor_app_get_display_direction_deg(void);
 /** Noch nicht abgearbeitete Encoder-Rasten ±1 (main.cpp); für on_target_deg: Bus nicht vor encoder_process_pending überschreiben. */
 int rotor_encoder_pending_detents(void);
 
+/** true: Fokus auf rotor_id/controller_id — main bündelt Encoder nicht (eine Raste = ein ID-Schritt). */
+bool rotor_app_encoder_id_field_focused(void);
+
 /**
  * Hardware-Taster: wenn ein ID-Feld (rotor_id / controller_id) fokussiert ist — Fokus weg.
  * Flash (config.json) nur wenn die Zahl gültig ist und sich von der gespeicherten unterscheidet.

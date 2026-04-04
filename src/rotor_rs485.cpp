@@ -7,7 +7,9 @@
  * SETASELECT (DST 255): kein Pending/ACK — sofort senden.
  * SETCONIDF / SETCONTID (DST 255): neue Controller-master_id → config.json + ACK_SETCONIDF bzw. ACK_SETCONTID.
  * GETANEMO/GETTEMPA/GETWINDDIR/GETTEMPM: nur Stillstand, ohne Fremd-PC; ACKs auch bei PC-Mitlesen.
- * GETCONANO/SETCONANO: Anemometer/Wetter-Tab (1/0) in config.json; bei 0 kein Wetter-Polling.
+ * GETCONANO/SETCONANO: Anemometer/Wetter-Tab (1/0) in config.json; bei 0 weiter GETTEMPA (Außentemp Rotor-Info).
+ * GETCONDELTA/SETCONDELTA: Encoder-Schritt 1 oder 10 Zehntelgrad (0,1° bzw. 1° pro Raste) → config encoder_delta.
+ * GETCONCHA/SETCONCHA: Antennenwechsel 1 = taget behalten + SETPOS, 0 = taget = Ist-Anzeige (config concha).
  * GETTEMPM zyklisch alle ROTOR_MOTOR_TEMP_POLL_MS (5 s); Wetter-GETs unverändert gestaffelt.
  *
  * Verbindung: Fehler 10 (Verbindungstimeout), wenn länger kein Telegramm vom Slave (SRC=Rotor-ID)
@@ -1194,6 +1196,58 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
         return true;
     }
 
+    if (strstr(line, ":GETCONDELTA:")) {
+        if (!CFG_TRY_TAG(":GETCONDELTA:")) {
+            config_reply_nak(src, "NAK_GETCONDELTA", 2);
+            return true;
+        }
+        config_reply_ack_u8(src, "ACK_GETCONDELTA", pwm_config_get_encoder_delta_tenths());
+        return true;
+    }
+
+    if (strstr(line, ":SETCONDELTA:")) {
+        if (!CFG_TRY_TAG(":SETCONDELTA:")) {
+            config_reply_nak(src, "NAK_SETCONDELTA", 2);
+            return true;
+        }
+        unsigned v = 0;
+        if (sscanf(par, "%u", &v) != 1 || (v != 1u && v != 10u)) {
+            config_reply_nak(src, "NAK_SETCONDELTA", 1);
+            return true;
+        }
+        pwm_config_set_encoder_delta_tenths((uint8_t)v);
+        pwm_config_save();
+        s_pending_config_changed_from_bus = true;
+        config_reply_ack_u8(src, "ACK_SETCONDELTA", pwm_config_get_encoder_delta_tenths());
+        return true;
+    }
+
+    if (strstr(line, ":GETCONCHA:")) {
+        if (!CFG_TRY_TAG(":GETCONCHA:")) {
+            config_reply_nak(src, "NAK_GETCONCHA", 2);
+            return true;
+        }
+        config_reply_ack_u8(src, "ACK_GETCONCHA", pwm_config_get_concha());
+        return true;
+    }
+
+    if (strstr(line, ":SETCONCHA:")) {
+        if (!CFG_TRY_TAG(":SETCONCHA:")) {
+            config_reply_nak(src, "NAK_SETCONCHA", 2);
+            return true;
+        }
+        unsigned v = 0;
+        if (sscanf(par, "%u", &v) != 1 || v > 1u) {
+            config_reply_nak(src, "NAK_SETCONCHA", 1);
+            return true;
+        }
+        pwm_config_set_concha((uint8_t)v);
+        pwm_config_save();
+        s_pending_config_changed_from_bus = true;
+        config_reply_ack_u8(src, "ACK_SETCONCHA", pwm_config_get_concha());
+        return true;
+    }
+
     static const struct {
         const char *get_tag;
         const char *set_tag;
@@ -2139,12 +2193,10 @@ static void try_antenna_boot_first_get(void)
     s_antenna_boot_phase = 1;
 }
 
-/** GETANEMO / GETTEMPA / GETWINDDIR nur ohne Fremd-PC, Stillstand (kein Homing-/Positions-Polling). */
+/** GETANEMO / GETTEMPA / GETWINDDIR nur ohne Fremd-PC, Stillstand (kein Homing-/Positions-Polling).
+ * anemometer=0: nur GETTEMPA (Außentemp im Tab Rotor_Info, kein Wind-Tab). */
 static void try_weather_poll(void)
 {
-    if (pwm_config_get_anemometer() == 0) {
-        return;
-    }
     if (!s_boot_done || s_poll_pos || s_poll_ref) {
         return;
     }
@@ -2155,6 +2207,11 @@ static void try_weather_poll(void)
         return;
     }
     if ((int32_t)(millis() - s_next_weather_ms) < 0) {
+        return;
+    }
+    if (pwm_config_get_anemometer() == 0) {
+        send_request("GETTEMPA", "0", Pending::GetTempA);
+        s_next_weather_ms = millis() + ROTOR_WEATHER_STAGGER_MS;
         return;
     }
     switch (s_weather_phase % 3u) {

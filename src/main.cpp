@@ -94,11 +94,9 @@ using namespace esp_panel::board;
 #define GPIO_BUTTON_PIN         GPIO_NUM_0
 
 /**
- * Zehntelgrad pro Encoder-Raste (1 = 0,1°/Klick, 10 = 1°/Klick).
+ * Zehntelgrad pro Encoder-Raste: pwm_config encoder_delta (1 = 0,1°/Klick, 10 = 1°/Klick), SETCONDELTA/JSON.
  * Callbacks zählen nur ±1 Raste; Skalierung nur in encoder_process_pending.
- * Bei 1: Bus-Soll kann kurz 0,1° hinter der UI liegen — rotor_app ignoriert solche Echo (siehe on_target_deg).
  */
-static constexpr int ENCODER_DELTA_TENTHS_PER_STEP = 1;
 
 static ESP_Knob *s_encoder_knob = nullptr;
 
@@ -110,7 +108,11 @@ static volatile int32_t s_encoder_pending_detents = 0;
 /** Pro Knopf-Event genau ±1 Raste (Skalierung nur beim Abarbeiten). */
 static void encoder_knob_apply_detent(int sign)
 {
-    if (sign == 0 || ENCODER_DELTA_TENTHS_PER_STEP == 0) {
+    if (sign == 0) {
+        return;
+    }
+    const int delta = static_cast<int>(pwm_config_get_encoder_delta_tenths());
+    if (delta <= 0) {
         return;
     }
     portENTER_CRITICAL(&s_encoder_pending_mux);
@@ -118,7 +120,11 @@ static void encoder_knob_apply_detent(int sign)
     portEXIT_CRITICAL(&s_encoder_pending_mux);
 }
 
-/** Im Arduino-loop(): einen Zehntelgrad-Schritt pro Iteration, bis Queue leer (max. pro Runde). */
+/**
+ * Im Arduino-loop(): Pending-Rasten abarbeiten.
+ * Positions-Encoder: Zehntel pro Runde summieren → ein rotor_app_encoder_step (ein LVGL-Refresh/Arc statt pro Raste).
+ * ID-Felder: eine Raste = ein Schritt (Zählung pro Klick).
+ */
 static void encoder_process_pending(void)
 {
     if (rotor_error_app_is_fault_locked()) {
@@ -128,6 +134,29 @@ static void encoder_process_pending(void)
         return;
     }
     constexpr int kMaxDrain = 128;
+    const int delta = static_cast<int>(pwm_config_get_encoder_delta_tenths());
+    if (delta <= 0) {
+        return;
+    }
+
+    if (rotor_app_encoder_id_field_focused()) {
+        for (int n = 0; n < kMaxDrain; ++n) {
+            int32_t step = 0;
+            portENTER_CRITICAL(&s_encoder_pending_mux);
+            const int32_t p = s_encoder_pending_detents;
+            if (p == 0) {
+                portEXIT_CRITICAL(&s_encoder_pending_mux);
+                break;
+            }
+            step = (p > 0) ? 1 : -1;
+            s_encoder_pending_detents -= step;
+            portEXIT_CRITICAL(&s_encoder_pending_mux);
+            rotor_app_encoder_step(static_cast<int>(step) * delta);
+        }
+        return;
+    }
+
+    int32_t accum_tenths = 0;
     for (int n = 0; n < kMaxDrain; ++n) {
         int32_t step = 0;
         portENTER_CRITICAL(&s_encoder_pending_mux);
@@ -139,7 +168,10 @@ static void encoder_process_pending(void)
         step = (p > 0) ? 1 : -1;
         s_encoder_pending_detents -= step;
         portEXIT_CRITICAL(&s_encoder_pending_mux);
-        rotor_app_encoder_step(static_cast<int>(step) * ENCODER_DELTA_TENTHS_PER_STEP);
+        accum_tenths += static_cast<int32_t>(step) * static_cast<int32_t>(delta);
+    }
+    if (accum_tenths != 0) {
+        rotor_app_encoder_step(static_cast<int>(accum_tenths));
     }
 }
 

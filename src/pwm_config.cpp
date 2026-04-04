@@ -22,6 +22,10 @@ static uint16_t s_touch_beep_freq_hz = 1100;
 static uint8_t s_touch_beep_vol = 14;
 /** GETCONANO/SETCONANO — Wetter-Tab (1) / aus (0) */
 static uint8_t s_anemometer = 1;
+/** GETCONDELTA/SETCONDELTA — Zehntel pro Encoder-Raste: 1 oder 10 */
+static uint8_t s_encoder_delta_tenths = 1;
+/** GETCONCHA/SETCONCHA — Antennenwechsel: 1 = taget behalten, 0 = taget = Ist-Anzeige */
+static uint8_t s_concha = 1;
 
 static char s_ant_label[3][48];
 static uint8_t s_last_antenna = 1;
@@ -113,6 +117,8 @@ void pwm_config_load_defaults(void)
     s_touch_beep_freq_hz = 1100;
     s_touch_beep_vol = 14;
     s_anemometer = 1;
+    s_encoder_delta_tenths = 1;
+    s_concha = 1;
 }
 
 void pwm_config_load(void)
@@ -172,6 +178,14 @@ void pwm_config_load(void)
     if (ano == 0 || ano == 1) {
         s_anemometer = (uint8_t)ano;
     }
+    int ed = parse_int_after_key(buf, "encoder_delta");
+    if (ed == 1 || ed == 10) {
+        s_encoder_delta_tenths = (uint8_t)ed;
+    }
+    int ch = parse_int_after_key(buf, "concha");
+    if (ch == 0 || ch == 1) {
+        s_concha = (uint8_t)ch;
+    }
 }
 
 void pwm_config_save(void)
@@ -197,11 +211,13 @@ void pwm_config_save(void)
              "  \"last_antenna\": %u,\n"
              "  \"confrq\": %u,\n"
              "  \"lsl\": %u,\n"
-             "  \"anemometer\": %u\n"
+             "  \"anemometer\": %u,\n"
+             "  \"encoder_delta\": %u,\n"
+             "  \"concha\": %u\n"
              "}\n",
              (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_master_id, (unsigned)s_rotor_id, e1, e2, e3,
              (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol,
-             (unsigned)s_anemometer);
+             (unsigned)s_anemometer, (unsigned)s_encoder_delta_tenths, (unsigned)s_concha);
     f.print(line);
     f.close();
 }
@@ -353,5 +369,29 @@ void pwm_config_set_anemometer(uint8_t on_0_or_1)
 {
     if (on_0_or_1 <= 1u) {
         s_anemometer = on_0_or_1;
+    }
+}
+
+uint8_t pwm_config_get_encoder_delta_tenths(void)
+{
+    return s_encoder_delta_tenths;
+}
+
+void pwm_config_set_encoder_delta_tenths(uint8_t tenths_1_or_10)
+{
+    if (tenths_1_or_10 == 1u || tenths_1_or_10 == 10u) {
+        s_encoder_delta_tenths = tenths_1_or_10;
+    }
+}
+
+uint8_t pwm_config_get_concha(void)
+{
+    return s_concha;
+}
+
+void pwm_config_set_concha(uint8_t zero_or_one)
+{
+    if (zero_or_one <= 1u) {
+        s_concha = zero_or_one;
     }
 }

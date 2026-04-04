@@ -9,5 +9,7 @@
   "last_antenna": 1,
   "confrq": 1100,
   "lsl": 14,
-  "anemometer": 1
+  "anemometer": 1,
+  "encoder_delta": 1,
+  "concha": 1
 }
