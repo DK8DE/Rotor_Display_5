@@ -118,11 +118,6 @@ void touch_feedback_arc_release(void)
     }
     s_last_arc_beep_ms = now;
     s_last_beep_ms = now;
-    {
-        const uint16_t f = pwm_config_get_touch_beep_freq_hz();
-        const uint16_t f_arc = (f > 220u) ? static_cast<uint16_t>(f - 180u) : 200u;
-        const uint8_t v = pwm_config_get_touch_beep_vol();
-        const uint8_t v_arc = (v > 2u) ? static_cast<uint8_t>(v - 2u) : v;
-        play_safe_beep(f_arc, v_arc, 30);
-    }
+    /* Gleicher Klang wie Button-Pieps (früher: niedrigere Frequenz + leisere Stufe — wirkte „dunkel“/fremd). */
+    play_safe_beep(pwm_config_get_touch_beep_freq_hz(), pwm_config_get_touch_beep_vol(), 32);
 }
