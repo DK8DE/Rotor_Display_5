@@ -139,6 +139,9 @@ static bool s_pending_antenna_offset_notify = false;
 /** SET* config: pwm_config_save + UI (LVGL) in rotor_rs485_idle_tasks */
 static bool s_pending_config_changed_from_bus = false;
 
+/** Viele ACK_GETPOSDG in einem poll(): Ist-Callback nur einmal pro loop() — sonst blockiert LVGL die UART-Verarbeitung. */
+static bool s_pos_ui_deferred = false;
+
 /** ACK_GETANEMO / ACK_GETTEMPA / ACK_GETTEMPM / ACK_WINDDIR (Anzeige in loop(), nicht im Parser) */
 static float s_last_wind_kmh = 0.0f;
 static float s_last_tempa_c = 0.0f;
@@ -244,6 +247,8 @@ static void abort_antenna_boot(void)
 }
 
 static void notify_target(float deg);
+static void flush_deferred_position_ui(void);
+static void try_flush_setposcc(void);
 
 /** Bei Fehler stoppt der Slave — kein weiteres GETPOSDG-Polling / keine ausstehende Pos-Sync bis Recovery */
 static void stop_fault_motion_polling(void)
@@ -267,6 +272,7 @@ void rotor_rs485_set_target_callback(rotor_rs485_target_cb_t cb) { s_target_cb =
 
 void rotor_rs485_idle_tasks(void)
 {
+    flush_deferred_position_ui();
     if (s_pending_antenna_offset_notify) {
         s_pending_antenna_offset_notify = false;
         rotor_app_antenna_offset_changed();
@@ -331,6 +337,8 @@ bool rotor_rs485_is_foreign_pc_listen_mode(void)
 static void clear_pending()
 {
     s_pending = Pending::None;
+    /* SETPOSCC (Encoder-Vorschau): sonst während GETPOSDG-Polling nie flush — PC sieht Soll nicht live. */
+    try_flush_setposcc();
 }
 
 static void set_pending(Pending p)
@@ -690,9 +698,16 @@ static void notify_pos(float deg)
         return;
     }
     s_last_pos_ui_deg = deg;
-    if (s_pos_cb) {
-        s_pos_cb(deg);
+    s_pos_ui_deferred = true;
+}
+
+static void flush_deferred_position_ui(void)
+{
+    if (!s_pos_ui_deferred || !s_pos_cb) {
+        return;
     }
+    s_pos_ui_deferred = false;
+    s_pos_cb(s_last_pos_ui_deg);
 }
 
 static void notify_target(float deg)
@@ -1338,6 +1353,16 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
 
 static void dispatch_bus_command_to_slave(const char *line, unsigned src)
 {
+    /* SETASELECT oft als #SRC:SlaveID:SETASELECT:n:CS$ (nicht nur Broadcast 255) — sonst sieht der Controller
+     * den Antennenwechsel von der PC-Software während der Fahrt nicht. */
+    {
+        unsigned ant = 0;
+        if (parse_setaselect_antenna_1_to_3(line, &ant)) {
+            rotor_app_apply_remote_antenna_selection((uint8_t)ant);
+            return;
+        }
+    }
+
     /* PC-Client (anderer Master): SETREF:1 → gleiche Homing-Flags wie rotor_rs485_send_setref_homing()
      * (LED, Meldetext „Referenziere“, NeoPixel-Lauflicht, GETREF bis referenziert). */
     if (src != (unsigned)s_master_id) {
@@ -2076,10 +2101,14 @@ static void process_complete_line(const char *line, size_t len)
             handle_broadcast_set_controller_master_id(line, src);
             return;
         }
-        /* SETASELECT: auch bei SRC = eigene Master-ID (USB-Loopback vom PC; kein Echo von hw_send). */
+        /* SETASELECT: auch bei SRC = eigene Master-ID (USB-Loopback vom PC; kein Echo von hw_send).
+         * Fremder Master am Broadcast: Mitläufer-Modus setzen (sonst fehlt dst==Slave bei 255). */
         if (strstr(line, ":SETASELECT:")) {
             unsigned v = 0;
             if (parse_setaselect_antenna_1_to_3(line, &v)) {
+                if (src != (unsigned)s_master_id) {
+                    s_last_foreign_master_to_slave_ms = millis();
+                }
                 rotor_app_apply_remote_antenna_selection((uint8_t)v);
             }
         }
@@ -2384,6 +2413,9 @@ void rotor_rs485_loop(void)
 
     on_ack_timeout();
 
+    /* Vor pending-Return: wartet auf freien Bus (z. B. GETANGLE1…3 nach Boot) — sonst kein erneuter SETPOSDG-Versuch. */
+    try_hw_snap_retarget();
+
     if (s_pending != Pending::None) {
         return;
     }
@@ -2406,9 +2438,6 @@ void rotor_rs485_loop(void)
         }
         return;
     }
-
-    /* Vor GETPOSDG-Polling: SETPOSDG für HW-Snap erneut versuchen, wenn Bus eben noch belegt war. */
-    try_hw_snap_retarget();
 
     if (s_pending != Pending::None) {
         return;

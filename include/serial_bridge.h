@@ -26,8 +26,8 @@ void uart_unlock();
 
 /**
  * RS485 senden (DE/RE umschalten, schreiben, wieder Empfang).
- * Dieselben Bytes werden auf USB-Serial (Serial) ausgegeben, damit SETPOSDG u. a.
- * vom Display aus auch am PC-Terminal sichtbar sind (HW-RX echo’t lokales TX nicht).
+ * USB-Spiegel nur mit freiem CDC-Puffer (availableForWrite): ohne Leser am USB blockiert
+ * kein Serial.write die Hauptschleife — Bus-RX wird trotzdem sofort geparst (taget_dg / Ist).
  */
 void hw_send(const uint8_t *data, size_t len);
 

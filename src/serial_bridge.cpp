@@ -80,6 +80,28 @@ void uart_unlock()
     }
 }
 
+/** USB-Monitor: nur bis Puffer frei — nie blockieren (ohne PC-Leser: sonst Parser/Anzeige verzögert). */
+static void mirror_usb_nonblocking(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0) {
+        return;
+    }
+    size_t off = 0;
+    while (off < len) {
+        const int space = Serial.availableForWrite();
+        if (space <= 0) {
+            break;
+        }
+        const size_t chunk =
+            (size_t)space < (len - off) ? (size_t)space : (len - off);
+        const size_t w = Serial.write(data + off, chunk);
+        if (w == 0) {
+            break;
+        }
+        off += w;
+    }
+}
+
 void hw_send(const uint8_t *data, size_t len)
 {
     if (!data || len == 0) {
@@ -95,8 +117,7 @@ void hw_send(const uint8_t *data, size_t len)
     dir_receive();
     uart_unlock();
     s_last_bus_activity_us = micros();
-    /* Lokale Master-Telegramme (SETPOSDG, GETREF, …) erscheinen sonst nicht am USB-Monitor */
-    Serial.write(data, len);
+    mirror_usb_nonblocking(data, len);
 }
 
 void begin()
@@ -108,8 +129,9 @@ void begin()
     dir_receive();
 
     /* Muss vor begin() — sonst [E] HardwareSerial „can't be resized when already running" */
-    s_hw->setRxBufferSize(1024);
-    s_hw->setTxBufferSize(1024);
+    /* Großer RX: bei vielen GETPOSDG-ACKs + LVGL darf der Puffer nicht überlaufen (sonst Nachlauf-Anzeige). */
+    s_hw->setRxBufferSize(4096);
+    s_hw->setTxBufferSize(2048);
     s_hw->begin(s_baud, SERIAL_8N1, kPinUartRx, kPinUartTx);
 }
 
@@ -181,8 +203,9 @@ static void pump_hw_to_usb_and_parser()
             return;
         }
         s_last_bus_activity_us = micros();
-        Serial.write(buf, n);
+        /* Zuerst Parser: SETPOSDG/taget_dg sofort — USB-Spiegel darf nicht vor RX-Parser blockieren */
         rotor_rs485_rx_bytes(buf, n);
+        mirror_usb_nonblocking(buf, n);
     }
 }
 

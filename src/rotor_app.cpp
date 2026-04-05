@@ -22,6 +22,7 @@
 #include "ui/screens.h"
 
 extern "C" void rotor_app_antenna_offset_changed(void);
+static void rotor_app_antenna_switch_from_ui(uint8_t prev_antenna_1_to_3, bool send_bus_goto);
 
 /** EEZ-Export: lv_img_set_angle am Pfeil; nach Init auf 0, Drehung nur per Style-Transform (siehe rotor_app_init). */
 static int16_t s_pfeil_wind_eez_base_angle01 = 0;
@@ -148,12 +149,17 @@ extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3)
     if (n_1_to_3 < 1u || n_1_to_3 > 3u) {
         return;
     }
+    const uint8_t prev = pwm_config_get_last_antenna();
+    if (prev == n_1_to_3) {
+        return;
+    }
     pwm_config_set_last_antenna(n_1_to_3);
     pwm_config_save();
     rotor_rs485_send_setaselect(n_1_to_3);
     lvgl_port_lock(-1);
     antenna_apply_style(n_1_to_3);
-    rotor_app_antenna_offset_changed();
+    /* Mitläufer (fremder Master): kein eigenes SETPOSDG — PC-Software sendet Soll; nur Anzeige/Arc anpassen. */
+    rotor_app_antenna_switch_from_ui(prev, !rotor_rs485_is_foreign_pc_listen_mode());
     lvgl_port_unlock();
 }
 
@@ -172,11 +178,15 @@ static void on_antenna_btn(lv_event_t *e)
     } else if (btn == objects.antenna_3) {
         n = 3;
     }
+    const uint8_t prev = pwm_config_get_last_antenna();
+    if (prev == n) {
+        return;
+    }
     pwm_config_set_last_antenna(n);
     pwm_config_save();
     antenna_apply_style(n);
     rotor_rs485_send_setaselect(n);
-    rotor_app_antenna_offset_changed();
+    rotor_app_antenna_switch_from_ui(prev, true);
 }
 
 /** hauptanzeige: Tab 0…4 = Position, Fast, Antennen, Temperaturen_Wind, Rotor_Info */
@@ -517,10 +527,10 @@ static float active_antenna_offset_deg(void)
     return pwm_config_get_antoff_deg(static_cast<int>(pwm_config_get_last_antenna()));
 }
 
-/** Anzeige (Kompass / Antennenrichtung) = Buslage + gewählter Antennenversatz */
-static float bus_to_display(float bus_deg_ui)
+/** Kompass = Buslage + Versatz der angegebenen Antenne (1…3) — beim Wechsel: Strahl mit alter Antenne. */
+static float bus_to_display_for_idx(float bus_deg_ui, int ant_1_to_3)
 {
-    const float off = active_antenna_offset_deg();
+    const float off = pwm_config_get_antoff_deg(ant_1_to_3);
     if (bus_deg_ui >= 359.5f) {
         if (std::fabs(static_cast<double>(off)) < 1e-6) {
             return 360.0f;
@@ -530,10 +540,16 @@ static float bus_to_display(float bus_deg_ui)
     return norm360_add(bus_deg_ui + off);
 }
 
-/** Soll am Bus für SETPOSDG aus Anzeige-Winkel */
-static float display_to_bus(float display_deg)
+/** Anzeige (Kompass / Antennenrichtung) = Buslage + Versatz der aktuell gewählten Antenne */
+static float bus_to_display(float bus_deg_ui)
 {
-    const float off = active_antenna_offset_deg();
+    return bus_to_display_for_idx(bus_deg_ui, static_cast<int>(pwm_config_get_last_antenna()));
+}
+
+/** Soll am Bus für SETPOSDG aus Anzeige-Winkel und Antenne ant_1_to_3 */
+static float display_to_bus_for_idx(float display_deg, int ant_1_to_3)
+{
+    const float off = pwm_config_get_antoff_deg(ant_1_to_3);
     if (display_deg >= 359.5f) {
         if (std::fabs(static_cast<double>(off)) < 1e-6f) {
             return 360.0f;
@@ -541,6 +557,12 @@ static float display_to_bus(float display_deg)
         return norm360_add(360.0f - off);
     }
     return norm360_add(display_deg - off);
+}
+
+/** Soll am Bus für SETPOSDG aus Anzeige-Winkel (aktuelle last_antenna) */
+static float display_to_bus(float display_deg)
+{
+    return display_to_bus_for_idx(display_deg, static_cast<int>(pwm_config_get_last_antenna()));
 }
 
 float rotor_app_get_display_direction_deg(void)
@@ -674,9 +696,17 @@ static void on_target_deg(float bus_deg)
 {
     /* Während Encoder aktiv ist: Bus darf taget_dg NICHT überschreiben.
      * Sonst überschreibt z. B. „Ankunft am alten SETPOS“ (notify_target(s_goto_commanded_deg))
-     * einen bereits weiter gedrehten Soll — wirkt wie „1. Klick fehlt“ / falsches Ziel. */
+     * einen bereits weiter gedrehten Soll — wirkt wie „1. Klick fehlt“ / falsches Ziel.
+     * Ausnahme: SETPOSDG von anderem Master (Mithören) — explizite PC-Fahrt, Session beenden. */
     if (s_encoder_adjusting) {
-        return;
+        if (rotor_rs485_is_remote_setpos_motion()) {
+            s_encoder_adjusting = false;
+            s_encoder_goto_retry_pending = false;
+            s_encoder_retry_deadline_ms = 0;
+            s_encoder_idle_deadline_ms = 0;
+        } else {
+            return;
+        }
     }
     /* loop(): serial_bridge/RS485 vor encoder_process_pending — alter Bus-Soll sonst vor dem Encoder-Tick. */
     if (rotor_encoder_pending_detents() != 0) {
@@ -727,7 +757,8 @@ static void on_target_deg(float bus_deg)
     lvgl_port_lock(-1);
     char buf[16];
     fmt_taget_from_display_deg(buf, sizeof(buf), disp);
-    taget_dg_set_display_text(buf);
+    /* Kein lv_refr_now: bei Bus-Flut blockiert synchrones Rendering die RS485-Zeilenverarbeitung. */
+    taget_dg_set_display_text(buf, false);
     lvgl_port_unlock();
 }
 
@@ -986,8 +1017,47 @@ extern "C" bool rotor_app_encoder_id_field_focused(void)
     return s_id_field_focus != IdFieldFocus::None;
 }
 
+/**
+ * Nur GETANTOFF1…3 vom Rotor geladen — keine Antennenumschaltung, kein SETPOS (sonst Bewegung beim Boot).
+ */
 extern "C" void rotor_app_antenna_offset_changed(void)
 {
+    s_encoder_adjusting = false;
+    s_encoder_goto_retry_pending = false;
+    s_encoder_retry_deadline_ms = 0;
+    s_encoder_idle_deadline_ms = 0;
+    on_position_deg(s_last_bus_ist_deg);
+}
+
+/**
+ * Nach pwm_config_set_last_antenna(neu): gleiche Kompassrichtung (Strahl) wie mit prev_antenna
+ * zur aktuellen Buslage — SETPOSDG mit umgerechneter Mechanik (nur wenn send_bus_goto).
+ * Mitläufer-Modus: send_bus_goto false — nur taget/Arc/Offset, kein eigenes SETPOSDG (vom PC kommt SETPOSDG).
+ */
+static void rotor_app_antenna_switch_from_ui(uint8_t prev_antenna_1_to_3, bool send_bus_goto)
+{
+    s_encoder_adjusting = false;
+    s_encoder_goto_retry_pending = false;
+    s_encoder_retry_deadline_ms = 0;
+    s_encoder_idle_deadline_ms = 0;
+
+    const uint8_t now_ant = pwm_config_get_last_antenna();
+    if (prev_antenna_1_to_3 < 1u || prev_antenna_1_to_3 > 3u || now_ant < 1u || now_ant > 3u) {
+        return;
+    }
+
+    /* concha 0: Soll = Ist in Anzeige für die neue Antenne (kein Strahl beibehalten). */
+    const float beam_compass =
+        bus_to_display_for_idx(s_last_bus_ist_deg, static_cast<int>(prev_antenna_1_to_3));
+    const float disp_ist_new_ant =
+        bus_to_display_for_idx(s_last_bus_ist_deg, static_cast<int>(now_ant));
+    const uint8_t concha = pwm_config_get_concha();
+    const float soll_display = (concha == 0) ? disp_ist_new_ant : beam_compass;
+
+    s_encoder_target_deg = soll_display;
+    s_encoder_tenths = wrap_tenths_deg(
+        static_cast<int>(std::floor(static_cast<double>(soll_display) * 10.0 + 1e-4)));
+
     on_position_deg(s_last_bus_ist_deg);
 
     if (rotor_error_app_is_fault_locked()) {
@@ -1000,26 +1070,16 @@ extern "C" void rotor_app_antenna_offset_changed(void)
         return;
     }
 
-    if (pwm_config_get_concha() == 0) {
-        /* taget = aktuelle Ist-Anzeige (Kompass) für die gewählte Antenne — kein SETPOS */
+    if (concha == 0) {
         s_taget_ignore_bus_target_until_ms = 0;
-        const float disp = bus_to_display(s_last_bus_ist_deg);
-        s_encoder_target_deg = disp;
-        s_encoder_tenths = wrap_tenths_deg(
-            static_cast<int>(std::floor(static_cast<double>(disp) * 10.0 + 1e-4)));
         lvgl_port_lock(-1);
         char buf[16];
-        fmt_taget_from_display_deg(buf, sizeof(buf), disp);
+        fmt_taget_from_display_deg(buf, sizeof(buf), soll_display);
         taget_dg_set_display_text(buf);
         lvgl_port_unlock();
-        s_encoder_adjusting = false;
-        s_encoder_goto_retry_pending = false;
-        s_encoder_retry_deadline_ms = 0;
-        s_encoder_idle_deadline_ms = 0;
         return;
     }
 
-    /* concha 1: Anzeige-Soll (Kompass) bleibt; SETPOS für neue Antennen-Geometrie */
     s_taget_ignore_bus_target_until_ms = millis() + 2000;
 
     lvgl_port_lock(-1);
@@ -1028,12 +1088,13 @@ extern "C" void rotor_app_antenna_offset_changed(void)
     taget_dg_set_display_text(buf);
     lvgl_port_unlock();
 
-    s_encoder_adjusting = false;
-    s_encoder_goto_retry_pending = false;
-    s_encoder_retry_deadline_ms = 0;
-    s_encoder_idle_deadline_ms = 0;
-
-    (void)encoder_apply_goto(s_encoder_target_deg);
+    if (!send_bus_goto) {
+        return;
+    }
+    if (!encoder_apply_goto(beam_compass)) {
+        rotor_rs485_hw_snap_retarget_request(
+            display_to_bus_for_idx(beam_compass, static_cast<int>(now_ant)));
+    }
 }
 
 /**
