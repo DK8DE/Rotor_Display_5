@@ -5,6 +5,7 @@
  *
  * Bus-Regel: Pro Anfrage ein ausstehendes Telegramm; nächste Anfrage erst nach ACK (oder Timeout).
  * SETASELECT (DST 255): kein Pending/ACK — sofort senden.
+ * SETPOSCC: Encoder-Vorschau-Soll (wie SETPOSDG-Grad, Bus+USB), kein Pending — vor dem verzögerten SETPOSDG.
  * SETCONIDF / SETCONTID (DST 255): neue Controller-master_id → config.json + ACK_SETCONIDF bzw. ACK_SETCONTID.
  * GETANEMO/GETTEMPA/GETWINDDIR/GETTEMPM: nur Stillstand, ohne Fremd-PC; ACKs auch bei PC-Mitlesen.
  * GETCONANO/SETCONANO: Anemometer/Wetter-Tab (1/0) in config.json; bei 0 weiter GETTEMPA (Außentemp Rotor-Info).
@@ -14,8 +15,18 @@
  *
  * Verbindung: Fehler 10 (Verbindungstimeout), wenn länger kein Telegramm vom Slave (SRC=Rotor-ID)
  * oder vor erster Antwort nur Timeouts — PC- oder Controller-Abfragen zählen (ROTOR_CONN_LOST_TIMEOUT_MS).
- * Fehler 10: GETREF-Recovery bis Antwort; bei erstem Slave-Telegramm quittiert (kein Display-Neustart).
+ * Fehler 10: GETERR-Recovery bis ACK_ERR (nicht GETREF zuerst — ref=1 trotz Slave-Fehler möglich).
  * Boot: zuerst 3× TEST:0 (Ping, je ROTOR_RS485_ACK_TIMEOUT_MS); ohne ACK_TEST/NAK_TEST → sofort Fehler 10.
+ *
+ * Zweiter Master auf demselben RS485-Segment (eigenes PC-Interface, nicht „durch den Controller“ gebündelt):
+ * gleiche Master-ID wie Display → ACK_GETPOSDG/ACK_SETPOSDG am Bus nicht zuordenbar, Pending kann falsch
+ * gelöst werden. PC dann andere Master-ID als der Controller (config.json master_id).
+ * Liest die PC-Software nur den USB-Mitschnitt des Controllers (kein eigener Bus-TX auf dieselbe Leitung),
+ * entsteht dieses ACK-Problem durch den PC nicht.
+ *
+ * Fremd-Master auf dem Bus (z. B. PC ID 1, Display ID 2): früher wurde komplett kein eigenes GETPOSDG
+ * mehr gesendet und GETPOSDG-Timeouts löschten das Pending — Ist lief nur über fremde ACKs → Nachlaufen.
+ * Während s_poll_pos / s_poll_ref läuft der Display trotzdem eigenes Polling (siehe rotor_rs485_loop / on_ack_timeout).
  */
 
 #include "rotor_rs485.h"
@@ -153,6 +164,8 @@ static uint32_t s_pos_grace_end_ms = 0;
 static bool s_boot_done = false;
 static uint32_t s_boot_earliest_ms = 0;
 static uint8_t s_boot_phase = 0; /* 0=Warten, 1=GETREF gesendet, 2=GETPOSDG gesendet, 3=fertig */
+/** Nach TEST: GETERR vor erstem GETREF (oder Quittung durch Mitläufer/ACK_ERR), damit kein falsches „Betriebsbereit“. */
+static bool s_startup_err_known = false;
 
 /** Nach GETPOSDG-Antwort: Soll = Ist (Einschalten, Boot, Homing) */
 static bool s_align_target_after_pos_read = false;
@@ -173,6 +186,10 @@ static float s_last_pos_ui_deg = 0.0f;
 static uint32_t s_next_periodic_getref_ms = 0;
 /** GETERR zyklisch (Fehlercode / Betriebsbereit) */
 static uint32_t s_next_geterr_ms = 0;
+
+/** SETPOSCC: zuletzt gewünschter Busgrad — Versand erst in rotor_rs485_loop bei freiem Pending (kein TX vor ACK/GETPOS). */
+static bool s_setposcc_queued = false;
+static float s_setposcc_queued_deg = 0.0f;
 
 /** HW-Taster: Soll = Ist — SETPOSDG wiederholen bis ACK (Bus busy / kein ACK). */
 static bool s_hw_snap_retarget_active = false;
@@ -201,7 +218,7 @@ static uint32_t s_last_slave_rx_ms = 0;
 static bool s_have_slave_rx_ever = false;
 /** Start Uhr „keine Slave-Antwort“: erster GETREF (Boot) oder erster Befehl Richtung Slave (PC) */
 static uint32_t s_conn_watch_start_ms = 0;
-/** GETREF-Recovery nach Fehler 10 */
+/** GETERR-Recovery nach Fehler 10 (Intervall wie ROTOR_POLL_GAP_MS) */
 static uint32_t s_next_conn_recovery_getref_ms = 0;
 
 /** Nächster Wetter-GET (nur ohne PC, Stillstand); 0=ANEMO, 1=TEMPA, 2=WINDDIR */
@@ -288,6 +305,8 @@ uint8_t rotor_rs485_weather_ui_take_mask(void)
 }
 
 bool rotor_rs485_is_boot_done(void) { return s_boot_done; }
+
+bool rotor_rs485_is_startup_error_checked(void) { return s_startup_err_known; }
 
 bool rotor_rs485_is_referenced(void) { return s_slave_referenced; }
 
@@ -619,6 +638,26 @@ bool rotor_rs485_goto_degrees(float deg)
     /* Callback: Bus-Ist/Soll (normalisiert), UI rechnet Antennenversatz um */
     notify_target(n);
     return true;
+}
+
+static void try_flush_setposcc(void)
+{
+    if (!s_setposcc_queued || !bus_send_allowed_by_fault()) {
+        return;
+    }
+    char p[40];
+    format_deg_param(p, sizeof(p), s_setposcc_queued_deg);
+    send_line("SETPOSCC", p);
+    s_setposcc_queued = false;
+}
+
+void rotor_rs485_send_setposcc_degrees(float deg)
+{
+    if (!bus_send_allowed_by_fault()) {
+        return;
+    }
+    s_setposcc_queued_deg = normalize_deg_0_360(deg);
+    s_setposcc_queued = true;
 }
 
 static void try_hw_snap_retarget(void)
@@ -1328,11 +1367,22 @@ static void on_ack_timeout()
     if (!pending_timed_out()) {
         return;
     }
-    /* Fremd-Master bedient den Rotor: eigene GET-*-Pending nicht endlos wiederholen (Kollision). */
+    /* Fremd-Master bedient den Rotor: eigene GET-*-Pending nicht endlos wiederholen (Kollision).
+     * Ausnahme: lokale Positionsfahrt / Homing — sonst kein eigenes GETPOSDG/GETREF und Ist nur aus fremden ACKs. */
     if (rotor_rs485_is_foreign_pc_listen_mode()) {
         switch (s_pending) {
         case Pending::GetRef:
+            if (s_poll_ref) {
+                break;
+            }
+            clear_pending();
+            return;
         case Pending::GetPosDg:
+            if (s_poll_pos) {
+                break;
+            }
+            clear_pending();
+            return;
         case Pending::GetErr:
         case Pending::GetAnemo:
         case Pending::GetTempA:
@@ -1429,18 +1479,24 @@ static void on_ack_timeout()
     }
 }
 
-/** Quittung auf SETPOSDG — danach erst GETPOSDG */
+/** Quittung auf SETPOSDG — danach erst GETPOSDG (nur wenn ACK an unsere Master-ID, nicht fremder Master gleicher Bus) */
 static bool parse_ack_setposdg_result(const char *line)
 {
+    unsigned src = 0;
+    unsigned dst = 0;
+    if (!line_src_dst(line, &src, &dst)) {
+        return false;
+    }
     const char *p = strstr(line, ":ACK_SETPOSDG:");
     if (!p) {
         return false;
     }
-    if (s_pending == Pending::SetPosDg) {
+    const bool for_us = (dst == (unsigned)s_master_id);
+    if (for_us && s_pending == Pending::SetPosDg) {
         clear_pending();
         s_hw_snap_retarget_active = false;
     }
-    if (s_poll_pos && !rotor_rs485_is_foreign_pc_listen_mode()) {
+    if (for_us && s_poll_pos && !rotor_rs485_is_foreign_pc_listen_mode()) {
         send_request("GETPOSDG", "0", Pending::GetPosDg);
     }
     return true;
@@ -1714,6 +1770,11 @@ static bool parse_ack_getref(const char *line)
 
 static bool parse_ack_getposdg(const char *line)
 {
+    unsigned ack_src = 0;
+    unsigned ack_dst = 0;
+    if (!line_src_dst(line, &ack_src, &ack_dst)) {
+        return false;
+    }
     const char *p = strstr(line, ":ACK_GETPOSDG:");
     if (!p) {
         return false;
@@ -1732,18 +1793,21 @@ static bool parse_ack_getposdg(const char *line)
     const float deg_raw = strtof(valbuf, nullptr);
     const float deg = normalize_deg_0_360(deg_raw);
     const float deg_ui = bus_deg_for_ui(deg, deg_raw);
+    /* Ist: immer aus Slave-Position (Mitläufer-PC kann GETPOSDG mitschicken — Anzeige bleibt aktuell). */
     notify_pos(deg_ui);
 
-    if (s_pending == Pending::GetPosDg) {
+    const bool for_us = (ack_dst == (unsigned)s_master_id);
+    if (for_us && s_pending == Pending::GetPosDg) {
         clear_pending();
     }
 
-    if (!s_boot_done && s_boot_phase == 2) {
+    if (for_us && !s_boot_done && s_boot_phase == 2) {
         s_boot_done = true;
         s_boot_phase = 3;
     }
 
-    if (s_poll_pos) {
+    /* Positionsfahrt / Toleranz nur mit Antworten auf unser eigenes GETPOSDG — sonst fremde ACKs stören die State Machine. */
+    if (for_us && s_poll_pos) {
         if (min_angle_diff(deg, s_target_deg) <= ROTOR_POS_TOL_DEG) {
             if (s_pos_grace_end_ms == 0) {
                 s_pos_grace_end_ms = millis() + ROTOR_POLL_POS_GRACE_MS;
@@ -1778,7 +1842,7 @@ static bool parse_ack_getposdg(const char *line)
         }
     }
 
-    if (s_align_target_after_pos_read) {
+    if (for_us && s_align_target_after_pos_read) {
         s_align_target_after_pos_read = false;
         s_target_deg = deg;
         notify_target(deg_ui);
@@ -1802,11 +1866,20 @@ static bool parse_ack_err(const char *line)
     }
     valbuf[i] = '\0';
     const int code = atoi(valbuf);
+    const bool pending_geterr = (s_pending == Pending::GetErr);
+    if (!s_startup_err_known) {
+        if (pending_geterr || (!s_boot_done && s_boot_phase == 0)) {
+            s_startup_err_known = true;
+        }
+    }
     if (code != 0) {
         rotor_error_app_set_error_code(code);
         stop_fault_motion_polling();
+    } else {
+        /* Verbindungstimeout (10) nur hier aufheben — nicht bei beliebiger Slave-Zeile (sonst GETREF=1 → „Betriebsbereit“ vor ACK_ERR). */
+        rotor_error_app_set_error_code(0);
     }
-    if (s_pending == Pending::GetErr) {
+    if (pending_geterr) {
         clear_pending();
     }
     return true;
@@ -1825,6 +1898,11 @@ static bool parse_nak_and_clear(const char *line)
         return true;
     }
     if (strstr(line, ":NAK_GETPOSDG:") && s_pending == Pending::GetPosDg) {
+        unsigned nsrc = 0;
+        unsigned ndst = 0;
+        if (!line_src_dst(line, &nsrc, &ndst) || ndst != (unsigned)s_master_id) {
+            return false;
+        }
         clear_pending();
         s_align_target_after_pos_read = false;
         if (!s_boot_done && s_boot_phase == 2) {
@@ -1834,6 +1912,11 @@ static bool parse_nak_and_clear(const char *line)
         return true;
     }
     if (strstr(line, ":NAK_SETPOSDG:") && s_pending == Pending::SetPosDg) {
+        unsigned nsrc = 0;
+        unsigned ndst = 0;
+        if (!line_src_dst(line, &nsrc, &ndst) || ndst != (unsigned)s_master_id) {
+            return false;
+        }
         clear_pending();
         s_poll_pos = false;
         s_pos_grace_end_ms = 0;
@@ -1892,6 +1975,9 @@ static bool parse_nak_and_clear(const char *line)
     }
     if (strstr(line, ":NAK_GETERR:") && s_pending == Pending::GetErr) {
         clear_pending();
+        if (!s_startup_err_known) {
+            s_startup_err_known = true;
+        }
         return true;
     }
     if (strstr(line, ":NAK_GETANEMO:") && s_pending == Pending::GetAnemo) {
@@ -2003,9 +2089,6 @@ static void process_complete_line(const char *line, size_t len)
     if (src == (unsigned)s_slave_id) {
         s_last_slave_rx_ms = millis();
         s_have_slave_rx_ever = true;
-        if (rotor_error_app_get_error_code() == 10) {
-            rotor_error_app_set_error_code(0);
-        }
         if (parse_slave_err(line)) {
             return;
         }
@@ -2130,6 +2213,7 @@ void rotor_rs485_init(void)
     s_boot_earliest_ms = millis() + ROTOR_BOOT_QUERY_DELAY_MS;
     s_boot_done = false;
     s_boot_phase = 0;
+    s_startup_err_known = false;
     s_next_periodic_getref_ms = millis() + ROTOR_PERIODIC_GETREF_MS;
     s_next_geterr_ms = millis() + ROTOR_POLL_GETERR_MS;
     s_hw_snap_retarget_active = false;
@@ -2138,6 +2222,7 @@ void rotor_rs485_init(void)
     s_next_weather_ms = millis() + 2000u;
     s_weather_phase = 0;
     s_next_motortemp_ms = millis() + 2000u;
+    s_setposcc_queued = false;
 }
 
 /** Erstes Paket nach Einschalten: TEST (Ping), 3 Versuche ohne ACK → Fehler 10 */
@@ -2159,12 +2244,33 @@ static void try_boot_test(void)
     send_request("TEST", "0", Pending::Test);
 }
 
+/** Einmal GETERR nach TEST und Wartezeit, bevor das erste GETREF die Referenz setzt (Fehler vor „Bereit“). */
+static void try_boot_startup_geterr(void)
+{
+    if (s_startup_err_known || s_boot_done) {
+        return;
+    }
+    if (!s_boot_test_done || s_pending != Pending::None) {
+        return;
+    }
+    if ((int32_t)(millis() - s_boot_earliest_ms) < 0) {
+        return;
+    }
+    if (s_boot_phase != 0) {
+        return;
+    }
+    send_request("GETERR", "0", Pending::GetErr);
+}
+
 static void try_boot_getref()
 {
     if (s_boot_done || s_pending != Pending::None) {
         return;
     }
     if (!s_boot_test_done) {
+        return;
+    }
+    if (!s_startup_err_known) {
         return;
     }
     if ((int32_t)(millis() - s_boot_earliest_ms) < 0) {
@@ -2282,17 +2388,19 @@ void rotor_rs485_loop(void)
         return;
     }
 
+    try_flush_setposcc();
+
     try_boot_test();
 
     if (s_pending != Pending::None) {
         return;
     }
 
-    /* Fehler 10: zyklisch GETREF vor anderem Bus-Traffic (kein HW-Snap solange offline) */
+    /* Fehler 10: GETERR (nicht GETREF) — Slave kann ref=1 melden, obwohl GETERR ≠ 0 (kein Flackern „Betriebsbereit“). */
     if (rotor_error_app_get_error_code() == 10) {
         if (!rotor_rs485_is_foreign_pc_listen_mode()) {
             if ((int32_t)(millis() - s_next_conn_recovery_getref_ms) >= 0) {
-                send_request("GETREF", "0", Pending::GetRef);
+                send_request("GETERR", "0", Pending::GetErr);
                 s_next_conn_recovery_getref_ms = millis() + ROTOR_POLL_GAP_MS;
             }
         }
@@ -2307,6 +2415,18 @@ void rotor_rs485_loop(void)
     }
 
     if (rotor_rs485_is_foreign_pc_listen_mode()) {
+        if (s_boot_test_done && !s_startup_err_known) {
+            s_startup_err_known = true;
+        }
+        /* Ohne Ausnahme: kein eigenes GETPOSDG bei lokaler Fahrt → Ist nur über fremde Master-ACKs, wirkt wie Nachlaufen. */
+        if (!s_poll_pos && !s_poll_ref) {
+            return;
+        }
+    }
+
+    try_boot_startup_geterr();
+
+    if (s_pending != Pending::None) {
         return;
     }
 

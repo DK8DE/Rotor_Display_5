@@ -73,11 +73,22 @@ static void pwm_style_slow_fast(bool fast_active)
 {
     const lv_color_t c_on = lv_color_hex(0x087321);
     const lv_color_t c_off = lv_color_hex(0x2196f3);
+    const lv_color_t c_txt_on_green = lv_color_hex(0xFFFFFF);
+    const lv_color_t c_txt_on_blue = lv_color_hex(0x000000);
     if (objects.slow) {
         lv_obj_set_style_bg_color(objects.slow, fast_active ? c_off : c_on, LV_PART_MAIN);
     }
     if (objects.fast) {
         lv_obj_set_style_bg_color(objects.fast, fast_active ? c_on : c_off, LV_PART_MAIN);
+    }
+    /* Grün aktiv → weiße Schrift; blau inaktiv → schwarz */
+    if (objects.label__slow) {
+        lv_obj_set_style_text_color(objects.label__slow, fast_active ? c_txt_on_blue : c_txt_on_green,
+                                    LV_PART_MAIN);
+    }
+    if (objects.label_fast) {
+        lv_obj_set_style_text_color(objects.label_fast, fast_active ? c_txt_on_green : c_txt_on_blue,
+                                    LV_PART_MAIN);
     }
 }
 
@@ -116,13 +127,19 @@ static void antenna_apply_style(uint8_t active_1_to_3)
 {
     const lv_color_t c_on = lv_color_hex(0x087321);
     const lv_color_t c_off = lv_color_hex(0x2196f3);
+    const lv_color_t c_txt_on_green = lv_color_hex(0xFFFFFF);
+    const lv_color_t c_txt_on_blue = lv_color_hex(0x000000);
     lv_obj_t *btns[3] = { objects.antenna_1, objects.antenna_2, objects.antenna_3 };
+    lv_obj_t *labels[3] = { objects.antenna_1_label, objects.antenna_2_label, objects.antenna_3_label };
     for (uint8_t i = 0; i < 3; i++) {
         if (!btns[i]) {
             continue;
         }
         const bool on = (active_1_to_3 == (uint8_t)(i + 1));
         lv_obj_set_style_bg_color(btns[i], on ? c_on : c_off, LV_PART_MAIN);
+        if (labels[i]) {
+            lv_obj_set_style_text_color(labels[i], on ? c_txt_on_green : c_txt_on_blue, LV_PART_MAIN);
+        }
     }
 }
 
@@ -634,8 +651,15 @@ static void on_ref_status(bool referenced)
 {
     lvgl_port_lock(-1);
     if (objects.homing_led) {
-        lv_led_set_color(objects.homing_led,
-                         referenced ? lv_color_hex(0x43b302) : lv_color_hex(0xff0000));
+        /* Fehler / Start-GETERR ausstehend: nicht grün nur wegen GETREF=1 */
+        if (rotor_error_app_get_error_code() != 0 || !rotor_rs485_is_startup_error_checked()) {
+            lv_led_set_color(objects.homing_led, lv_color_hex(0xff0000));
+            lv_led_set_brightness(objects.homing_led, 255);
+        } else {
+            lv_led_set_color(objects.homing_led,
+                             referenced ? lv_color_hex(0x43b302) : lv_color_hex(0xff0000));
+            lv_led_set_brightness(objects.homing_led, 255);
+        }
     }
     /* Ohne Referenz kein gültiger Ist-Winkel vom Slave — alte Anzeige verwirrt nach Rotor-Neustart.
      * Kein Unicode U+2014 (—): eingebettete Font hat kein Glyph → lv_draw_sw_letter Warnung. */
@@ -726,7 +750,11 @@ static void on_position_deg(float bus_deg_ui)
     if (objects.actual_dg) {
         lv_textarea_set_text(objects.actual_dg, buf);
     }
-    if (!s_arc_dragging && !s_encoder_adjusting && objects.grad_acc) {
+    /* Während Positionsfahrt: Arc immer aus Ist (GETPOSDG), auch wenn Encoder-Flag noch gesetzt ist
+     * (Beschleunigungs-Detents / Überlappung) — sonst „steht“ der Zeiger, actual läuft weiter. */
+    if (!s_arc_dragging &&
+        (!s_encoder_adjusting || rotor_rs485_is_position_polling()) &&
+        objects.grad_acc) {
         grad_acc_sync_mechanical(bus_deg_ui);
     }
     lvgl_port_unlock();
@@ -942,6 +970,9 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
     lvgl_port_unlock();
 
     s_encoder_target_deg = deg;
+
+    /* PC/Bus: bei jedem neuen taget vor dem verzögerten SETPOSDG (gleiche Buslage wie späteres SETPOSDG) */
+    rotor_rs485_send_setposcc_degrees(display_to_bus(deg));
 
     /* Kein Telegramm während Drehen: Pause neu starten; ausstehenden Bus-Retry verwirft neuer Takt */
     s_encoder_goto_retry_pending = false;

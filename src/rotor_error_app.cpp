@@ -1,7 +1,7 @@
 /**
  * Meldungen zu GETERR / async ERR; UI: meldetext, homing_led, Ring-Override in signals_ring_app.
- * Fehler bleiben bis Neustart, Ausnahme: Verbindungstimeout (10) — wird bei wiederkehrender
- * Slave-Antwort per Bus zurückgesetzt (kein Display-Neustart nötig).
+ * Fehler bleiben bis Neustart, Ausnahme: Verbindungstimeout (10) — wird bei ACK_ERR:0 (GETERR)
+ * zurückgesetzt, nicht bei beliebiger Slave-Zeile (ref=1 kann trotz Slave-Fehler sein).
  */
 
 #include "rotor_error_app.h"
@@ -88,6 +88,10 @@ static void apply_meldetext(void)
         apply_fault_meldetext_alternate(millis());
         return;
     }
+    if (!rotor_rs485_is_startup_error_checked()) {
+        lv_textarea_set_text(objects.meldetext, "Initialisiere");
+        return;
+    }
     const char *msg = nullptr;
     if (rotor_rs485_is_homing()) {
         msg = "Referenziere";
@@ -120,6 +124,11 @@ static void apply_homing_led_fault(uint32_t now_ms)
         s_led_blink_bright = !s_led_blink_bright;
         lv_led_set_color(objects.homing_led, lv_color_hex(0xff0000));
         lv_led_set_brightness(objects.homing_led, s_led_blink_bright ? 255 : 80);
+        return;
+    }
+    if (!rotor_rs485_is_startup_error_checked()) {
+        lv_led_set_color(objects.homing_led, lv_color_hex(ROTOR_HOMING_LED_RED));
+        lv_led_set_brightness(objects.homing_led, 255);
         return;
     }
     if (rotor_rs485_is_homing()) {
@@ -180,13 +189,17 @@ void rotor_error_app_loop(uint32_t now_ms)
     static bool last_homing = false;
     /* Initial true: erzwingt Abgleich, falls Slave nach Boot referenziert meldet */
     static bool last_referenced = true;
+    static bool last_startup_checked = false;
     const bool homing = rotor_rs485_is_homing();
     const bool referenced = rotor_rs485_is_referenced();
+    const bool startup_checked = rotor_rs485_is_startup_error_checked();
 
     lvgl_port_lock(-1);
-    if (s_err_code == 0 && (homing != last_homing || referenced != last_referenced)) {
+    if (s_err_code == 0 &&
+        (homing != last_homing || referenced != last_referenced || startup_checked != last_startup_checked)) {
         last_homing = homing;
         last_referenced = referenced;
+        last_startup_checked = startup_checked;
         apply_meldetext();
     }
     if (s_err_code != 0) {

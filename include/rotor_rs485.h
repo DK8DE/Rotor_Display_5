@@ -37,6 +37,11 @@ void rotor_rs485_init(void);
 /** True nach erstem abgeschlossenen Boot-Handshake (GETREF/ggf. GETPOSDG). */
 bool rotor_rs485_is_boot_done(void);
 /**
+ * True nach erstem GETERR (ACK/NAK) vor dem Boot-GETREF, oder Mitläufer-Modus / mitgehörtem ACK_ERR.
+ * Bis dahin soll die UI kein „Betriebsbereit“ nur wegen GETREF=1 zeigen (Fehler hat Vorrang).
+ */
+bool rotor_rs485_is_startup_error_checked(void);
+/**
  * Rohdaten vom RS485-UART (z. B. von serial_bridge nach HW→USB-Spiegelung).
  * Verarbeitet denselben Byte-Strom wie früher drain_rx intern.
  */
@@ -116,6 +121,13 @@ float rotor_rs485_get_last_position_deg(void);
  *         wird abgebrochen, damit Encoder-Befehle nicht „hängen bleiben“.
  */
 bool rotor_rs485_goto_degrees(float deg);
+
+/**
+ * SETPOSCC: Zielgrad wie SETPOSDG (0…360°, zwei Nachkommastellen, Komma), ohne ACK/Pending.
+ * Wird intern gequeued und in rotor_rs485_loop gesendet, sobald kein anderes Telegramm aussteht —
+ * damit Ist-Polling (GETPOSDG) nicht durch sofortiges TX verzögert wird.
+ */
+void rotor_rs485_send_setposcc_degrees(float deg);
 
 /**
  * HW-Taster „Ziel = aktuelle Position“: SETPOSDG mit deg wiederholt senden, bis der Bus frei ist

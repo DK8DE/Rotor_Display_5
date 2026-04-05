@@ -177,6 +177,8 @@
   <li><b>Slave‑ID</b>: ist die Zieladresse (<code>DST</code>) und kann mit <code>SETID</code> geändert werden.</li>
   <li><b>Master‑ID</b>: ist immer die Quelladresse (<code>SRC</code>) der Anfrage. Der Slave antwortet an genau diese ID (die Antwort hat dann <code>SRC=Slave</code> und <code>DST=Master</code>).</li>
   <li>Die Master‑ID muss also nicht <code>0</code> sein. Wenn mehrere Master existieren, antwortet der Slave jeweils an den Master, der die Anfrage geschickt hat.</li>
+  <li><b>Zwei Master auf derselben RS485‑Leitung</b> (z.B. PC mit eigenem USB‑RS485‑Adapter am gleichen Bus wie der Display‑Controller — der Datenverkehr des PC muss dafür <b>nicht</b> „durch den Controller“ geroutet sein): Der PC soll eine <b>andere Master‑ID</b> nutzen als der Controller (<code>config.json</code> <code>master_id</code> am Display). Sonst sind <code>ACK_GETPOSDG</code>/<code>ACK_SETPOSDG</code> mit gleichem <code>DST</code> nicht dem richtigen Gerät zuordenbar — Pending und Ist‑Anzeige können stolpern, wenn beide viel abfragen.</li>
+  <li><b>Nur Mitlausch per USB</b> (PC liest nur den Mitschnitt dessen, was der Controller ohnehin sendet/empfängt, ohne selbst auf dieselbe RS485‑Leitung zu senden): Dann betrifft das obige Zuordnungsproblem den PC‑Pfad nicht; die Ursachen für abweichendes UI‑Verhalten liegen woanders (z.B. Buslast, Timing, SETPOSCC).</li>
 </ul>
 
 <h3>Beispiele</h3>
@@ -574,6 +576,11 @@
 <td><code>#0:20:SETPOSDG:...:CS$</code></td>
 <td><code>#20:0:ACK_SETPOSDG:...:&lt;CS&gt;$</code><br><span class="muted">oder: <code>#20:0:NAK_SETPOSDG:REASON:CS$</code></span></td>
 <td><b><a href="#cmd-SETPOSDG">SETPOSDG</a></b><br>Positionsfahrt in Grad starten.</td>
+</tr>
+<tr>
+<td><code>#0:20:SETPOSCC:...:CS$</code></td>
+<td><span class="muted">(kein Slave-Pflicht-ACK; optional NAK je nach Gerät)</span></td>
+<td><b><a href="#cmd-SETPOSCC">SETPOSCC</a></b><br>Encoder-Vorschau-Soll (Display-Controller): gleiche Grad-Parameter wie SETPOSDG, kein Fahrauftrag. Auf USB mitgespiegelt — PC kann den Sollzeiger vor SETPOSDG nachführen.</td>
 </tr>
 <tr>
 <td><code>#0:20:GETID:...:CS$</code></td>
@@ -982,6 +989,11 @@
 <p><b>Was es macht:</b> Positionsfahrt in Grad starten.</p>
 <p><b>Details:</b> Parameter: Zielwinkel (z.B. 160,00).</p>
 <p><b>Gute Werte:</b> Zielwinkel in Grad, z.B. <code>160,00</code>. Bei sehr kleinen Schritten (0,01°) kann es sinnvoll sein, die Ankunftstoleranz (<code>ARRTOL</code>) etwas grösser zu wählen, damit die Regelung nicht „zittert“.</p>
+<hr>
+<h4 id="cmd-SETPOSCC"><code>SETPOSCC</code></h4>
+<p><b>Was es macht:</b> Nur Anzeige-/Vorschau-Soll melden (Encoder am Display-Controller) — <b>keine</b> Positionsfahrt am Rotor.</p>
+<p><b>Details:</b> Telegrammaufbau und Checksumme wie <code>SETPOSDG</code> (ein Float-Parameter, Komma). Wird bei jedem Encoder-Schritt gesendet, sobald <code>taget</code> auf dem Display neu steht; das eigentliche <code>SETPOSDG</code> folgt erst nach Encoder-Ruhepause. Gleichzeitig auf RS485 und USB (Monitor) ausgegeben, damit PC-Software den Sollzeiger früh in die richtige Richtung drehen kann.</p>
+<p><b>Hinweis:</b> Der Rotor-Slave muss den Befehl nicht verstehen; unkritisch, wenn er ignoriert wird.</p>
 <hr>
 <h4 id="cmd-STOP"><code>STOP</code></h4>
 <p><b>Was es macht:</b> Weicher Stop (normales Abbremsen).</p>
