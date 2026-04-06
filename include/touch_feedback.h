@@ -9,9 +9,10 @@ class Signals;
 void touch_feedback_set_signals(Signals *sig);
 
 /**
- * Aufruf aus dem Touch-read_cb bei Flanke (nur pressed=true wertet Pieps aus).
+ * Kurzer Button-Pieps (LV_EVENT_CLICKED-Handler in rotor_app — nicht vom Touch-read_cb).
+ * Gleiche Parameter wie konfigurierbarer Touch-Beep; zuverlässig mit der tatsächlichen Klick-Aktion.
  */
-void touch_feedback_touchpad_edge(bool pressed, int16_t x, int16_t y);
+void touch_feedback_button_click(void);
 
 /** Kurzer Pieps beim Loslassen des Kompass-Arcs (rotor_app on_arc RELEASED). */
 void touch_feedback_arc_release(void);

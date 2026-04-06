@@ -898,6 +898,46 @@ static bool parse_setposdg_command_deg(const char *line, float *out_deg)
     return true;
 }
 
+/**
+ * Grad-String aus Telegramm (z. B. "353,80" in valbuf als "353.80") ohne strtof-Rauschen.
+ * Binary-float von 353,8 ist oft 353,7999… — nach bus_to_display + floor (fmt_de) zeigt Ist fälschlich 353,7.
+ */
+static float parse_rs485_deg_valbuf_to_float(const char *valbuf)
+{
+    if (valbuf == nullptr || valbuf[0] == '\0') {
+        return 0.0f;
+    }
+    const char *p = valbuf;
+    while (*p == ' ' || *p == '\t') {
+        ++p;
+    }
+    long hi = 0;
+    bool any_digit = false;
+    while (*p >= '0' && *p <= '9') {
+        any_digit = true;
+        hi = hi * 10 + (*p - '0');
+        if (hi > 1000000L) {
+            break;
+        }
+        ++p;
+    }
+    if (!any_digit) {
+        return strtof(valbuf, nullptr);
+    }
+    unsigned frac_num = 0;
+    unsigned frac_den = 1;
+    if ((*p == '.' || *p == ',') && p[1] >= '0' && p[1] <= '9') {
+        ++p;
+        while (*p >= '0' && *p <= '9' && frac_den < 100000U) {
+            frac_num = frac_num * 10U + static_cast<unsigned>(*p - '0');
+            frac_den *= 10U;
+            ++p;
+        }
+    }
+    const double d = static_cast<double>(hi) + static_cast<double>(frac_num) / static_cast<double>(frac_den);
+    return static_cast<float>(d);
+}
+
 /** Fremd-Master (USB): SETANTOFFn an Slave — Versatz übernehmen */
 static void sniff_setantoff_to_slave(const char *line)
 {
@@ -1399,12 +1439,16 @@ static void dispatch_bus_command_to_slave(const char *line, unsigned src)
 
     float deg = 0.0f;
     if (parse_setposdg_command_deg(line, &deg)) {
-        /* Lokal: goto_degrees() setzt s_poll_pos; PC-SETPOSDG kommt nur hierher (kein UART-Echo vom
-         * eigenen hw_send) — Flag für HW-STOP, solange kein Ankunft/STOP. */
-        s_remote_setpos_target_deg = deg;
-        s_remote_setpos_motion = true;
-        s_remote_setpos_grace_end_ms = 0;
-        notify_target(deg);
+        /* Nur fremde Master (z. B. PC): Soll-Anzeige + Remote-Fahrt. Eigenes SETPOSDG (SRC =
+         * s_master_id): Ziel setzt rotor_rs485_goto_degrees / Encoder; dieselbe Zeile taucht oft
+         * nochmals über USB-Spiegel oder RX auf — ein verzögertes *älteres* SETPOSDG würde sonst
+         * taget_dg zurückdrehen (Ist schon am neuen Winkel, Soll steht wieder auf alt). */
+        if (src != (unsigned)s_master_id) {
+            s_remote_setpos_target_deg = deg;
+            s_remote_setpos_motion = true;
+            s_remote_setpos_grace_end_ms = 0;
+            notify_target(deg);
+        }
     }
     sniff_setantoff_to_slave(line);
     sniff_setangle_to_slave(line);
@@ -1838,7 +1882,7 @@ static bool parse_ack_getposdg(const char *line)
         p++;
     }
     valbuf[i] = '\0';
-    const float deg_raw = strtof(valbuf, nullptr);
+    const float deg_raw = parse_rs485_deg_valbuf_to_float(valbuf);
     const float deg = normalize_deg_0_360(deg_raw);
     const float deg_ui = bus_deg_for_ui(deg, deg_raw);
     /* Ist: immer aus Slave-Position (Mitläufer-PC kann GETPOSDG mitschicken — Anzeige bleibt aktuell). */

@@ -101,6 +101,7 @@ static void on_slow_btn(lv_event_t *e)
     if (rotor_error_app_is_fault_locked()) {
         return;
     }
+    touch_feedback_button_click();
     s_pwm_ui_is_fast = false;
     pwm_style_slow_fast(false);
     const uint8_t p = pwm_config_get_slow();
@@ -117,6 +118,7 @@ static void on_fast_btn(lv_event_t *e)
     if (rotor_error_app_is_fault_locked()) {
         return;
     }
+    touch_feedback_button_click();
     pwm_style_slow_fast(true);
     const uint8_t p = pwm_config_get_fast();
     if (!rotor_rs485_send_set_pwm_limit(p)) {
@@ -182,6 +184,7 @@ static void on_antenna_btn(lv_event_t *e)
     if (prev == n) {
         return;
     }
+    touch_feedback_button_click();
     pwm_config_set_last_antenna(n);
     pwm_config_save();
     antenna_apply_style(n);
@@ -238,6 +241,7 @@ static void on_encoder_delta_btn(lv_event_t *e)
     if (rotor_error_app_is_fault_locked()) {
         return;
     }
+    touch_feedback_button_click();
     const uint8_t cur = pwm_config_get_encoder_delta_tenths();
     const uint8_t next = (cur >= 10u) ? 1u : 10u;
     pwm_config_set_encoder_delta_tenths(next);
@@ -668,6 +672,33 @@ static void taget_dg_set_display_text(const char *buf, bool sync_full_refr_now =
     }
 }
 
+/**
+ * Ist-Feld: max_length → lv_textarea_set_text baut den Text offiziell neu; nur Label zu setzen kann kurz
+ * richtig anzeigen, bis die Textarea intern wieder mit altem Puffer synchronisiert (Sprung zurück).
+ * Zusätzlich Label + invalidate wie bei taget (0,1°-Redraw).
+ */
+static void actual_dg_set_display_text(const char *buf, bool sync_full_refr_now = false)
+{
+    if (!objects.actual_dg || !buf) {
+        return;
+    }
+    lv_textarea_set_text(objects.actual_dg, buf);
+    lv_obj_t *const lab = lv_textarea_get_label(objects.actual_dg);
+    if (lab) {
+        lv_label_set_text(lab, buf);
+        lv_obj_invalidate(lab);
+    }
+    lv_obj_mark_layout_as_dirty(objects.actual_dg);
+    lv_obj_t *const par = lv_obj_get_parent(objects.actual_dg);
+    if (par) {
+        lv_obj_mark_layout_as_dirty(par);
+    }
+    lv_obj_invalidate(objects.actual_dg);
+    if (sync_full_refr_now) {
+        lv_refr_now(nullptr);
+    }
+}
+
 /** RS485-Pfad darf nicht direkt lvgl_port_lock + Label setzen (WDT/Deadlock mit LVGL-Task). */
 static void on_ref_status(bool referenced)
 {
@@ -686,9 +717,27 @@ static void on_ref_status(bool referenced)
     /* Ohne Referenz kein gültiger Ist-Winkel vom Slave — alte Anzeige verwirrt nach Rotor-Neustart.
      * Kein Unicode U+2014 (—): eingebettete Font hat kein Glyph → lv_draw_sw_letter Warnung. */
     if (!referenced && objects.actual_dg) {
-        lv_textarea_set_text(objects.actual_dg, "-");
+        actual_dg_set_display_text("-", false);
     }
     lvgl_port_unlock();
+}
+
+/**
+ * True, wenn bus_to_display(Soll) in Zehntelgrad nur um typisches Float-Rauschen von der Encoder-Session
+ * abweicht (z. B. 353,7499° → floor → 353,7 angezeigt obwohl Soll 353,8). Dann taget_dg nicht überschreiben.
+ * Fremd-Master-Fahrt: nie wegfiltern — PC-Soll kann bewusst um 0,1° anders sein.
+ */
+static bool bus_target_matches_session_tenth_noise(float disp_deg, int enc_tenths)
+{
+    double u = static_cast<double>(disp_deg) * 10.0;
+    double e = static_cast<double>(enc_tenths);
+    double diff = u - e;
+    if (diff > 1800.0) {
+        diff -= 3600.0;
+    } else if (diff < -1800.0) {
+        diff += 3600.0;
+    }
+    return std::fabs(diff) < 0.5;
 }
 
 /** Soll aus Bus (Echo, Ankunft, PC-Loopback) — taget_dg in Anzeige-Koordinaten (mit Versatz) */
@@ -730,6 +779,11 @@ static void on_target_deg(float bus_deg)
         }
     }
     const float disp = bus_to_display(bus_deg);
+    /* Nicht um 0,1° zurückspringen: gleicher physikalischer Soll, nur floor/Float unterhalb der Session-Zehntel. */
+    if (!rotor_rs485_is_remote_setpos_motion() &&
+        bus_target_matches_session_tenth_noise(disp, s_encoder_tenths)) {
+        return;
+    }
     /* 0,1°/Klick: Slave/Bus melden Soll oft eine Zehntelstufe hinter der UI (Rundung).
      * on_target_deg würde taget_dg zurücksetzen → wirkt wie „Klick fehlt“, nächster Klick zeigt dann +0,2°.
      * 1°/Klick (10 Zehntel): seltener sichtbar, daher wirkt delta=10 „stabiler“. */
@@ -768,7 +822,7 @@ static void on_position_deg(float bus_deg_ui)
     if (!rotor_rs485_is_referenced()) {
         lvgl_port_lock(-1);
         if (objects.actual_dg) {
-            lv_textarea_set_text(objects.actual_dg, "-");
+            actual_dg_set_display_text("-", false);
         }
         lvgl_port_unlock();
         return;
@@ -779,7 +833,7 @@ static void on_position_deg(float bus_deg_ui)
     const float disp = bus_to_display(bus_deg_ui);
     fmt_de(buf, sizeof(buf), disp);
     if (objects.actual_dg) {
-        lv_textarea_set_text(objects.actual_dg, buf);
+        actual_dg_set_display_text(buf, false);
     }
     /* Während Positionsfahrt: Arc immer aus Ist (GETPOSDG), auch wenn Encoder-Flag noch gesetzt ist
      * (Beschleunigungs-Detents / Überlappung) — sonst „steht“ der Zeiger, actual läuft weiter. */

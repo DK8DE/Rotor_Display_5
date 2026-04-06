@@ -11,7 +11,6 @@
 #include "esp_lib_utils.h"
 #include "esp_display_panel.hpp"
 #include "lvgl_v8_port.h"
-#include "touch_feedback.h"
 
 using namespace esp_panel::drivers;
 
@@ -778,10 +777,6 @@ static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
     Touch *tp = (Touch *)indev_drv->user_data;
     TouchPoint point;
 
-    static bool s_touch_down = false;
-    static lv_coord_t s_last_press_x = 0;
-    static lv_coord_t s_last_press_y = 0;
-
     /* Read data from touch controller */
     int read_touch_result = tp->readPoints(&point, 1, 0);
     if (read_touch_result > 0) {
@@ -802,19 +797,8 @@ static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
         data->point.x = x;
         data->point.y = y;
         data->state = LV_INDEV_STATE_PRESSED;
-        s_last_press_x = x;
-        s_last_press_y = y;
-        if (!s_touch_down) {
-            touch_feedback_touchpad_edge(true, static_cast<int16_t>(x), static_cast<int16_t>(y));
-            s_touch_down = true;
-        }
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
-        if (s_touch_down) {
-            touch_feedback_touchpad_edge(
-                false, static_cast<int16_t>(s_last_press_x), static_cast<int16_t>(s_last_press_y));
-            s_touch_down = false;
-        }
     }
 }
 
