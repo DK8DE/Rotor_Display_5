@@ -5,7 +5,8 @@
  *
  * Bus-Regel: Pro Anfrage ein ausstehendes Telegramm; nächste Anfrage erst nach ACK (oder Timeout).
  * SETASELECT (DST 255): kein Pending/ACK — sofort senden.
- * SETPOSCC: Encoder-Vorschau-Soll (wie SETPOSDG-Grad, Bus+USB), kein Pending — vor dem verzögerten SETPOSDG.
+ * SETPOSCC: Encoder-Vorschau nur im Mitläufer-Modus an den fremden Master (DST = dessen SRC-ID), nicht an den
+ * Rotor-Slave (NOTIMPL). Eigenbetrieb: kein SETPOSCC — niemand konsumiert es.
  * SETCONIDF / SETCONTID (DST 255): neue Controller-master_id → config.json + ACK_SETCONIDF bzw. ACK_SETCONTID.
  * GETANEMO/GETTEMPA/GETWINDDIR/GETTEMPM: nur Stillstand, ohne Fremd-PC; ACKs auch bei PC-Mitlesen.
  * GETCONANO/SETCONANO: Anemometer/Wetter-Tab (1/0) in config.json; bei 0 weiter GETTEMPA (Außentemp Rotor-Info).
@@ -215,6 +216,8 @@ static uint8_t s_angle_boot_phase = 0;
 
 /** Zuletzt #FremdMaster:RotorID:… gesehen (Millis); 0 = noch keiner */
 static uint32_t s_last_foreign_master_to_slave_ms = 0;
+/** Zuletzt gesehener Master (SRC), der unseren Slave (DST=Rotor-ID) angesprochen hat — Ziel für SETPOSCC im Mitläufer-Modus */
+static uint8_t s_foreign_master_src_id = 0;
 
 /** Zuletzt ein gültiges Telegramm mit SRC = Slave-ID (ACK/NAK/ERR …) — Verbindungs-Watchdog */
 static uint32_t s_last_slave_rx_ms = 0;
@@ -332,6 +335,16 @@ bool rotor_rs485_is_foreign_pc_listen_mode(void)
         return false;
     }
     return (millis() - s_last_foreign_master_to_slave_ms) < ROTOR_PC_FOREIGN_SILENCE_MS;
+}
+
+/** SETPOSCC an fremden Master: nur wenn Mitläufer-Fenster aktiv — oder lokale Positionsfahrt (GETPOSDG-Polling),
+ * sonst verfällt das 3s-Silence-Fenster ohne PC-Telegramm zum Slave und die Vorschau stoppt mitten in der Fahrt. */
+static bool cc_preview_to_foreign_allowed(void)
+{
+    if (rotor_rs485_is_foreign_pc_listen_mode()) {
+        return true;
+    }
+    return s_foreign_master_src_id != 0 && s_poll_pos;
 }
 
 static void clear_pending()
@@ -653,15 +666,25 @@ static void try_flush_setposcc(void)
     if (!s_setposcc_queued || !bus_send_allowed_by_fault()) {
         return;
     }
+    if (!cc_preview_to_foreign_allowed()) {
+        s_setposcc_queued = false;
+        return;
+    }
+    if (s_foreign_master_src_id == 0) {
+        return;
+    }
     char p[40];
     format_deg_param(p, sizeof(p), s_setposcc_queued_deg);
-    send_line("SETPOSCC", p);
+    send_line_to(s_foreign_master_src_id, "SETPOSCC", p);
     s_setposcc_queued = false;
 }
 
 void rotor_rs485_send_setposcc_degrees(float deg)
 {
     if (!bus_send_allowed_by_fault()) {
+        return;
+    }
+    if (!cc_preview_to_foreign_allowed()) {
         return;
     }
     s_setposcc_queued_deg = normalize_deg_0_360(deg);
@@ -2086,6 +2109,7 @@ static void process_complete_line(const char *line, size_t len)
     /* Anderer Master spricht unseren Rotor an → Mitläufer-Modus (GET-Polling aus loop aussetzen). */
     if (dst == (unsigned)s_slave_id && src != (unsigned)s_master_id) {
         s_last_foreign_master_to_slave_ms = millis();
+        s_foreign_master_src_id = (uint8_t)src;
     }
 
     /* Befehl an den Slave (beliebiger Master): Start Timeout-Uhr „noch keine Slave-Antwort“ (z. B. nur PC) */
@@ -2108,6 +2132,7 @@ static void process_complete_line(const char *line, size_t len)
             if (parse_setaselect_antenna_1_to_3(line, &v)) {
                 if (src != (unsigned)s_master_id) {
                     s_last_foreign_master_to_slave_ms = millis();
+                    s_foreign_master_src_id = (uint8_t)src;
                 }
                 rotor_app_apply_remote_antenna_selection((uint8_t)v);
             }
@@ -2406,6 +2431,7 @@ void rotor_rs485_loop(void)
             clear_pending();
             rotor_error_app_set_error_code(10);
             stop_fault_motion_polling();
+            s_foreign_master_src_id = 0;
             s_next_conn_recovery_getref_ms = millis() - ROTOR_POLL_GAP_MS;
             return;
         }
@@ -2416,11 +2442,13 @@ void rotor_rs485_loop(void)
     /* Vor pending-Return: wartet auf freien Bus (z. B. GETANGLE1…3 nach Boot) — sonst kein erneuter SETPOSDG-Versuch. */
     try_hw_snap_retarget();
 
+    /* SETPOSCC nutzt kein Pending — muss auch laufen während GETPOSDG/anderes ACK aussteht, sonst kein
+     * Vorschau-Telegramm beim Encoder während Positionsfahrt oder direkt danach. */
+    try_flush_setposcc();
+
     if (s_pending != Pending::None) {
         return;
     }
-
-    try_flush_setposcc();
 
     try_boot_test();
 

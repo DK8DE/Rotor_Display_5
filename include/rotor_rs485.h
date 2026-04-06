@@ -124,8 +124,9 @@ bool rotor_rs485_goto_degrees(float deg);
 
 /**
  * SETPOSCC: Zielgrad wie SETPOSDG (0…360°, zwei Nachkommastellen, Komma), ohne ACK/Pending.
- * Wird intern gequeued und in rotor_rs485_loop gesendet, sobald kein anderes Telegramm aussteht —
- * damit Ist-Polling (GETPOSDG) nicht durch sofortiges TX verzögert wird.
+ * Nur im Mitläufer-Modus (fremder Master spricht den Rotor an): Telegramm geht an diesen Master (DST),
+ * nicht an den Rotor — der Slave liefert sonst NAK_SETPOSCC:NOTIMPL. Eigenbetrieb: kein Versand.
+ * Wird gequeued und in rotor_rs485_loop geflusht, sobald kein anderes Telegramm aussteht.
  */
 void rotor_rs485_send_setposcc_degrees(float deg);
 

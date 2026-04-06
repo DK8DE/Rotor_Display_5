@@ -18,6 +18,7 @@
 #include "rotor_rs485.h"
 #include "signals_ring_app.h"
 #include "touch_feedback.h"
+#include "firmware_version.h"
 
 /** Signals → ATtiny: nur TX, wie im SignalsDemo (Serial1). */
 static constexpr int8_t SIGNALS_TX_PIN = 40;
@@ -231,6 +232,11 @@ static void LongPressStartCb(void *button_handle, void *usr_data) {
 void setup()
 {
     Serial.begin(115200);
+    Serial.printf("%s v%s (%s) — Copyright %s\n",
+                  FIRMWARE_APP_NAME,
+                  FIRMWARE_APP_VERSION,
+                  FIRMWARE_APP_DATE,
+                  FIRMWARE_APP_COPYRIGHT);
     serial_bridge::begin();
 
     Serial.println("Signals boot (TX GPIO40) …");

@@ -16,6 +16,12 @@ Dort sind Verbindung (seriell/TCP), Protokoll, Kompass, Karte und Schnittstellen
 
 Firmware für ESP32-S3 bauen und flashen. Bilder für LVGL liegen auf der FAT-Partition (über `uploadfs`); Quellen sind PNGs im Ordner `imgs/`.
 
+## Version und Lizenz
+
+- **Version:** siehe `include/firmware_version.h` (ein Blickwert wie bei [RotorTcpBridge](https://github.com/DK8DE/RotorTcpBridge) `rotortcpbridge/version.py`: Name, Version, Datum, Autor).
+- **Release:** `.\build.ps1 -Version "1.1"` setzt `FIRMWARE_APP_VERSION` und `FIRMWARE_APP_DATE` in `firmware_version.h`, danach wie gewohnt Build/Upload.
+- **Lizenz:** `LICENSE.txt` (Apache-2.0, identisch zur RotorTcpBridge-Vorgabe).
+
 ## EEZ Studio und Bildnamen (`imgs` vs. `src/ui`)
 
 - EEZ Studio kann beim Export oder Build LVGL-Bilder als **`*.bin`** unter **`src/ui`** ablegen. **Diese von EEZ erzeugten `.bin`-Dateien haben für dieses Projekt kein passendes Format** (andere LVGL-/Speicher-Erwartung als unsere FAT-Ladepfade). Sie werden daher **entfernt** und **nicht** verwendet.
