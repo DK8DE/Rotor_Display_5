@@ -93,6 +93,18 @@ static void pwm_style_slow_fast(bool fast_active)
     }
 }
 
+/** Pieps bei Finger-Druck (PRESSED) — zuverlässiger als CLICKED (Letzteres fehlt z. B. bei Tab-Scroll/Noise). */
+static void on_ui_button_press_beep(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_PRESSED) {
+        return;
+    }
+    if (rotor_error_app_is_fault_locked()) {
+        return;
+    }
+    touch_feedback_button_click();
+}
+
 static void on_slow_btn(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
@@ -101,7 +113,6 @@ static void on_slow_btn(lv_event_t *e)
     if (rotor_error_app_is_fault_locked()) {
         return;
     }
-    touch_feedback_button_click();
     s_pwm_ui_is_fast = false;
     pwm_style_slow_fast(false);
     const uint8_t p = pwm_config_get_slow();
@@ -118,7 +129,6 @@ static void on_fast_btn(lv_event_t *e)
     if (rotor_error_app_is_fault_locked()) {
         return;
     }
-    touch_feedback_button_click();
     pwm_style_slow_fast(true);
     const uint8_t p = pwm_config_get_fast();
     if (!rotor_rs485_send_set_pwm_limit(p)) {
@@ -184,7 +194,6 @@ static void on_antenna_btn(lv_event_t *e)
     if (prev == n) {
         return;
     }
-    touch_feedback_button_click();
     pwm_config_set_last_antenna(n);
     pwm_config_save();
     antenna_apply_style(n);
@@ -241,7 +250,6 @@ static void on_encoder_delta_btn(lv_event_t *e)
     if (rotor_error_app_is_fault_locked()) {
         return;
     }
-    touch_feedback_button_click();
     const uint8_t cur = pwm_config_get_encoder_delta_tenths();
     const uint8_t next = (cur >= 10u) ? 1u : 10u;
     pwm_config_set_encoder_delta_tenths(next);
@@ -784,9 +792,10 @@ static void on_target_deg(float bus_deg)
         bus_target_matches_session_tenth_noise(disp, s_encoder_tenths)) {
         return;
     }
-    /* 0,1°/Klick: Slave/Bus melden Soll oft eine Zehntelstufe hinter der UI (Rundung).
-     * on_target_deg würde taget_dg zurücksetzen → wirkt wie „Klick fehlt“, nächster Klick zeigt dann +0,2°.
-     * 1°/Klick (10 Zehntel): seltener sichtbar, daher wirkt delta=10 „stabiler“. */
+    /* 0,1°/Klick: Bus-Soll (notify_target / Echo) oft exakt eine Zehntelstufe hinter der Encoder-Session
+     * (Rundung/Slave noch nicht nachgezogen). Früher nur 900 ms Schutz → danach sprang taget zurück,
+     * SETPOSDG lief mit veraltetem s_encoder_target_deg / gar kein sinnvoller Versand. Mehrere Zehntel
+     * auf einmal: d != -1, kein Konflikt. */
     const int bus_t = wrap_tenths_deg(
         static_cast<int>(std::floor(static_cast<double>(disp) * 10.0 + 1e-4)));
     {
@@ -797,8 +806,9 @@ static void on_target_deg(float bus_deg)
         if (d < -1800) {
             d += 3600;
         }
-        constexpr uint32_t kBusTargetLagGraceMs = 900;
-        if ((uint32_t)(millis() - s_last_encoder_step_ms) < kBusTargetLagGraceMs && d == -1) {
+        constexpr uint32_t kBusTargetOneTenthLagProtectMs = 4500u;
+        if (!rotor_rs485_is_remote_setpos_motion() &&
+            (uint32_t)(millis() - s_last_encoder_step_ms) < kBusTargetOneTenthLagProtectMs && d == -1) {
             return;
         }
     }
@@ -930,24 +940,30 @@ extern "C" void rotor_app_init(void)
     }
     pwm_style_slow_fast(true);
     if (objects.slow) {
+        lv_obj_add_event_cb(objects.slow, on_ui_button_press_beep, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(objects.slow, on_slow_btn, LV_EVENT_CLICKED, nullptr);
     }
     if (objects.fast) {
+        lv_obj_add_event_cb(objects.fast, on_ui_button_press_beep, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(objects.fast, on_fast_btn, LV_EVENT_CLICKED, nullptr);
     }
     if (objects.encoder_delta_bu) {
+        lv_obj_add_event_cb(objects.encoder_delta_bu, on_ui_button_press_beep, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(objects.encoder_delta_bu, on_encoder_delta_btn, LV_EVENT_CLICKED, nullptr);
     }
     encoder_delta_apply_button_label();
     antenna_apply_labels_from_config();
     antenna_apply_style(pwm_config_get_last_antenna());
     if (objects.antenna_1) {
+        lv_obj_add_event_cb(objects.antenna_1, on_ui_button_press_beep, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(objects.antenna_1, on_antenna_btn, LV_EVENT_CLICKED, nullptr);
     }
     if (objects.antenna_2) {
+        lv_obj_add_event_cb(objects.antenna_2, on_ui_button_press_beep, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(objects.antenna_2, on_antenna_btn, LV_EVENT_CLICKED, nullptr);
     }
     if (objects.antenna_3) {
+        lv_obj_add_event_cb(objects.antenna_3, on_ui_button_press_beep, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(objects.antenna_3, on_antenna_btn, LV_EVENT_CLICKED, nullptr);
     }
     /* Windpfeil: EEZ (screens.c) unverändert lassen — REAL+lv_img_set_angle clippt falsch (1px-Strich).

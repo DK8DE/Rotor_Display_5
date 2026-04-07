@@ -9,8 +9,8 @@ class Signals;
 void touch_feedback_set_signals(Signals *sig);
 
 /**
- * Kurzer Button-Pieps (LV_EVENT_CLICKED-Handler in rotor_app — nicht vom Touch-read_cb).
- * Gleiche Parameter wie konfigurierbarer Touch-Beep; zuverlässig mit der tatsächlichen Klick-Aktion.
+ * Kurzer Button-Pieps (rotor_app: LV_EVENT_PRESSED auf Slow/Fast/Homing/Antennen — nicht vom Touch-read_cb).
+ * Gleiche Parameter wie konfigurierbarer Touch-Beep.
  */
 void touch_feedback_button_click(void);
 

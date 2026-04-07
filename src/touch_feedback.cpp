@@ -1,5 +1,6 @@
 /**
- * Button-Pieps über Signals (ATtiny): Aufruf aus rotor_app bei LV_EVENT_CLICKED (nicht aus touchpad_read).
+ * Button-Pieps über Signals (ATtiny): Aufruf aus rotor_app bei LV_EVENT_PRESSED (nicht CLICKED —
+ * Letzteres fehlt bei Tab-Scroll/Touch-Noise öfter; nicht aus touchpad_read).
  * Vor jedem Ton: stopTone (Signals), damit der Empfänger keine halben „T“-Zeilen parsiert.
  */
 

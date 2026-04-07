@@ -2,12 +2,13 @@
  * Transparente Brücke: USB Serial <-> HW-UART (RS485, Halbduplex).
  *
  * RS485 = ein Sender zu jeder Zeit. Kollisionen entstehen, wenn der Controller
- * PC-Daten auf den Bus schickt, während der Rotor noch eine Antwort sendet.
+ * PC-Daten auf den Bus schickt, während der Rotor noch eine Antwort sendet —
+ * oder wenn der Controller (rotor_rs485 / hw_send) zu früh nach einer Slave-
+ * Antwort wieder sendet, bevor Halbduplex/MAX485 sauber umgeschaltet ist.
  *
- * Schutz: Zeitbasierte Bus-Idle-Erkennung — nach jeder Aktivität (TX oder RX)
- * müssen mindestens kBusIdleUs Mikrosekunden Stille vergehen, bevor erneut
- * gesendet werden darf. Bei 115200 Baud ist 1 Byte ≈ 87 µs; 5 ms Stille
- * entspricht ~58 Byte-Zeiten und ist ein sicherer Indikator für Bus-Idle.
+ * Schutz: Zeitbasierte Bus-Idle — nach jeder Aktivität (TX oder RX) mindestens
+ * kBusIdleUs Stille, bevor erneut gesendet wird. Gilt jetzt auch fuer hw_send(),
+ * nicht nur fuer USB->Bus (pump_usb_to_hw).
  */
 
 #include "serial_bridge.h"
@@ -39,14 +40,16 @@ static constexpr size_t kUsbToHwBuf = 256;
 static constexpr size_t kHwToUsbBuf = 512;
 
 /** Wartezeit nach letztem gesendeten Byte, bevor wieder Empfang (Bus-Freigabe) */
-static constexpr uint32_t kTurnaroundMicros = 80;
+static constexpr uint32_t kTurnaroundMicros = 250;
 
 /**
- * Mindestens so lange Stille (kein RX und kein TX) bevor ein neues Paket auf den
- * Bus darf. 5 ms ≈ 58 Byte-Zeiten bei 115200 Baud — genug Inter-Frame-Gap, um
- * sicherzustellen, dass der Rotor seine Antwort beendet hat.
+ * Mindest-Stille vor erneutem Senden (Controller + USB). 12 ms ≈ 138 Byte-Zeiten
+ * @ 115200 — groessere Marge fuer MAX485/Slave-Umschaltung (sonst lange GETREF-Timeouts).
  */
-static constexpr uint32_t kBusIdleUs = 5000;
+static constexpr uint32_t kBusIdleUs = 12000;
+
+/** Max. Warten auf Bus-Idle (ms); muss deutlich > kBusIdleUs sein, sonst Senden ohne Pause. */
+static constexpr uint32_t kBusIdleWaitCapMs = 200;
 
 static HardwareSerial *s_hw = &Serial2;
 static uint32_t s_baud = 115200;
@@ -102,11 +105,71 @@ static void mirror_usb_nonblocking(const uint8_t *data, size_t len)
     }
 }
 
+/** Rest-RX leeren (zwischen poll() und hw_send eingetroffen) — Parser wie in pump_hw. */
+static void drain_hw_rx_quick()
+{
+    for (;;) {
+        uint8_t buf[128];
+        size_t n = 0;
+        uart_lock();
+        while (s_hw->available() && n < sizeof(buf)) {
+            int c = s_hw->read();
+            if (c < 0) {
+                break;
+            }
+            buf[n++] = static_cast<uint8_t>(c);
+        }
+        uart_unlock();
+        if (n == 0) {
+            return;
+        }
+        s_last_bus_activity_us = micros();
+        rotor_rs485_rx_bytes(buf, n);
+        mirror_usb_nonblocking(buf, n);
+    }
+}
+
+/**
+ * Vor Controller-Telegramm (GETREF, GETPOS, …): gleiche Idle-Regel wie bei USB->Bus,
+ * damit nicht im selben loop()-Takt direkt nach Slave-TX wieder gesendet wird.
+ */
+static void wait_bus_idle_for_controller_tx()
+{
+    const uint32_t deadline_ms = millis() + kBusIdleWaitCapMs;
+    for (;;) {
+        drain_hw_rx_quick();
+
+        uart_lock();
+        const bool has_rx = (s_hw->available() > 0);
+        uart_unlock();
+        if (has_rx) {
+            delayMicroseconds(200);
+            yield();
+            continue;
+        }
+
+        if ((uint32_t)(micros() - s_last_bus_activity_us) >= kBusIdleUs) {
+            return;
+        }
+
+        if ((int32_t)(millis() - deadline_ms) >= 0) {
+            /* Kein volles Idle erreicht (z. B. Dauer-RX): trotzdem Mindestluecke erzwingen */
+            delayMicroseconds(kBusIdleUs);
+            return;
+        }
+
+        delayMicroseconds(200);
+        yield();
+    }
+}
+
 void hw_send(const uint8_t *data, size_t len)
 {
     if (!data || len == 0) {
         return;
     }
+    wait_bus_idle_for_controller_tx();
+
     uart_lock();
     dir_transmit();
     s_hw->write(data, len);
