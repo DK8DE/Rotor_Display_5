@@ -1,6 +1,7 @@
 /**
  * config.json auf FFat (data/ → uploadfs): PWM, RS485-IDs, Antennen-Bezeichner, letzte Antenne.
  * Antennenversätze kommen zur Laufzeit vom Rotor (GETANTOFFn), nicht aus der Datei.
+ * pwm_fast: 1 = Werkseinstellung/UI „Fast“, 0 = „Slow“ (welches PWM-Limit nach Boot/Taste aktiv ist).
  */
 
 #include "pwm_config.h"
@@ -14,16 +15,18 @@
 
 static uint8_t s_slow = 50;
 static uint8_t s_fast = 100;
+/** 1 = Fast-Taste / Fast-PWM-Limit aktiv, 0 = Slow — Werkseinstellung Fast */
+static uint8_t s_pwm_ui_fast = 1;
 static uint8_t s_master_id = 2;
 static uint8_t s_rotor_id = 20;
 /** GETCONFRQ/SETCONFRQ — Touch-Pieps Frequenz (Hz) */
 static uint16_t s_touch_beep_freq_hz = 1100;
 /** GETLSL/SETLSL — Touch-Pieps Lautstärke (0…50, wie Signals::tone) */
 static uint8_t s_touch_beep_vol = 14;
-/** GETCONANO/SETCONANO — Wetter-Tab (1) / aus (0) */
-static uint8_t s_anemometer = 1;
-/** GETCONDELTA/SETCONDELTA — Zehntel pro Encoder-Raste: 1 oder 10 */
-static uint8_t s_encoder_delta_tenths = 1;
+/** GETCONANO/SETCONANO — Wetter-Tab (1) / aus (0); Standard 0 = kein Wetter vorgegeben */
+static uint8_t s_anemometer = 0;
+/** GETCONDELTA/SETCONDELTA — Zehntel pro Encoder-Raste: 1 = 0,1° oder 10 = 1°; Standard 10 */
+static uint8_t s_encoder_delta_tenths = 10;
 /** GETCONCHA/SETCONCHA — Antennenwechsel: 1 = taget behalten, 0 = taget = Ist-Anzeige */
 static uint8_t s_concha = 1;
 /** GETCONLEDP/SETCONLEDP — NeoPixel-Ring global 0…100 % */
@@ -106,6 +109,7 @@ void pwm_config_load_defaults(void)
 {
     s_slow = 50;
     s_fast = 100;
+    s_pwm_ui_fast = 1;
     s_last_antenna = 1;
     strncpy(s_ant_label[0], "KW Beam", sizeof(s_ant_label[0]) - 1);
     strncpy(s_ant_label[1], "2m / 70cm", sizeof(s_ant_label[1]) - 1);
@@ -118,8 +122,8 @@ void pwm_config_load_defaults(void)
     s_rotor_id = 20;
     s_touch_beep_freq_hz = 1100;
     s_touch_beep_vol = 14;
-    s_anemometer = 1;
-    s_encoder_delta_tenths = 1;
+    s_anemometer = 0;
+    s_encoder_delta_tenths = 10;
     s_concha = 1;
     s_led_ring_brightness_pct = 100;
 }
@@ -143,6 +147,10 @@ void pwm_config_load(void)
     }
     if (b >= 0 && b <= 100) {
         s_fast = (uint8_t)b;
+    }
+    int puf = parse_int_after_key(buf, "pwm_fast");
+    if (puf == 0 || puf == 1) {
+        s_pwm_ui_fast = (uint8_t)puf;
     }
     int mid = parse_int_after_key(buf, "master_id");
     if (mid >= 1 && mid <= 254) {
@@ -210,6 +218,7 @@ void pwm_config_save(void)
              "{\n"
              "  \"slow_pwm\": %u,\n"
              "  \"fast_pwm\": %u,\n"
+             "  \"pwm_fast\": %u,\n"
              "  \"master_id\": %u,\n"
              "  \"rotor_id\": %u,\n"
              "  \"antenna_1_label\": \"%s\",\n"
@@ -223,7 +232,8 @@ void pwm_config_save(void)
              "  \"concha\": %u,\n"
              "  \"conledp\": %u\n"
              "}\n",
-             (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_master_id, (unsigned)s_rotor_id, e1, e2, e3,
+             (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_pwm_ui_fast, (unsigned)s_master_id,
+             (unsigned)s_rotor_id, e1, e2, e3,
              (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol,
              (unsigned)s_anemometer, (unsigned)s_encoder_delta_tenths, (unsigned)s_concha,
              (unsigned)s_led_ring_brightness_pct);
@@ -239,6 +249,18 @@ uint8_t pwm_config_get_slow(void)
 uint8_t pwm_config_get_fast(void)
 {
     return s_fast;
+}
+
+uint8_t pwm_config_get_pwm_ui_fast(void)
+{
+    return s_pwm_ui_fast;
+}
+
+void pwm_config_set_pwm_ui_fast(uint8_t fast_0_or_1)
+{
+    if (fast_0_or_1 <= 1u) {
+        s_pwm_ui_fast = fast_0_or_1;
+    }
 }
 
 uint8_t pwm_config_get_master_id(void)

@@ -68,7 +68,8 @@ static uint8_t s_pwm_deferred = 255;
 /** Nach Start: einmal Fast-PWM aus config (SETPWM) */
 static bool s_pwm_boot_send_pending = true;
 /** UI: Fast-Taste aktiv (sonst Slow) — für Config-Sync vom Bus */
-static bool s_pwm_ui_is_fast = false;
+/** Standard: Fast (wie Boot-SETPWM); Slow nur nach Tipp auf „Slow“. */
+static bool s_pwm_ui_is_fast = true;
 
 static void pwm_style_slow_fast(bool fast_active)
 {
@@ -114,6 +115,8 @@ static void on_slow_btn(lv_event_t *e)
         return;
     }
     s_pwm_ui_is_fast = false;
+    pwm_config_set_pwm_ui_fast(0);
+    pwm_config_save();
     pwm_style_slow_fast(false);
     const uint8_t p = pwm_config_get_slow();
     if (!rotor_rs485_send_set_pwm_limit(p)) {
@@ -129,6 +132,9 @@ static void on_fast_btn(lv_event_t *e)
     if (rotor_error_app_is_fault_locked()) {
         return;
     }
+    s_pwm_ui_is_fast = true;
+    pwm_config_set_pwm_ui_fast(1);
+    pwm_config_save();
     pwm_style_slow_fast(true);
     const uint8_t p = pwm_config_get_fast();
     if (!rotor_rs485_send_set_pwm_limit(p)) {
@@ -439,6 +445,7 @@ extern "C" void rotor_app_config_changed_from_bus(void)
     lvgl_port_lock(-1);
     antenna_apply_labels_from_config();
     antenna_apply_style(pwm_config_get_last_antenna());
+    s_pwm_ui_is_fast = pwm_config_get_pwm_ui_fast() != 0;
     pwm_style_slow_fast(s_pwm_ui_is_fast);
     rotor_rs485_set_master_id(pwm_config_get_master_id());
     rotor_rs485_set_slave_id(pwm_config_get_rotor_id());
@@ -938,7 +945,8 @@ extern "C" void rotor_app_init(void)
         lv_obj_set_style_bg_color(objects.grad_acc, lv_color_hex(0xff0000), LV_PART_KNOB);
         lv_obj_set_style_bg_opa(objects.grad_acc, LV_OPA_COVER, LV_PART_KNOB);
     }
-    pwm_style_slow_fast(true);
+    s_pwm_ui_is_fast = pwm_config_get_pwm_ui_fast() != 0;
+    pwm_style_slow_fast(s_pwm_ui_is_fast);
     if (objects.slow) {
         lv_obj_add_event_cb(objects.slow, on_ui_button_press_beep, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(objects.slow, on_slow_btn, LV_EVENT_CLICKED, nullptr);
@@ -1241,7 +1249,8 @@ extern "C" void rotor_pwm_ui_loop(void)
         return;
     }
     if (s_pwm_boot_send_pending) {
-        if (rotor_rs485_send_set_pwm_limit(pwm_config_get_fast())) {
+        const uint8_t p = (pwm_config_get_pwm_ui_fast() != 0) ? pwm_config_get_fast() : pwm_config_get_slow();
+        if (rotor_rs485_send_set_pwm_limit(p)) {
             s_pwm_boot_send_pending = false;
         }
         return;

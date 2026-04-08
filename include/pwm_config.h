@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 
-/** Defaults: Slow 50 %, Fast 100 % */
+/** Defaults: Slow 50 %, Fast 100 %, pwm_fast = 1 (UI/Bus startet mit Fast-Limit) */
 void pwm_config_load_defaults(void);
 /** Liest config.json auf der FFat-Partition (data/ → uploadfs); bei Fehlern bleiben Defaults. */
 void pwm_config_load(void);
@@ -15,6 +15,10 @@ void pwm_config_save(void);
 
 uint8_t pwm_config_get_slow(void);
 uint8_t pwm_config_get_fast(void);
+
+/** UI/Bus: Slow/Fast aktiv — Werkseinstellung 1 = Fast (JSON pwm_fast 0/1) */
+uint8_t pwm_config_get_pwm_ui_fast(void);
+void pwm_config_set_pwm_ui_fast(uint8_t fast_0_or_1);
 
 /** RS485: eigene Master-ID (1…254), Default 2 */
 uint8_t pwm_config_get_master_id(void);
