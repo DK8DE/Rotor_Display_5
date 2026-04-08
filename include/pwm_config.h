@@ -63,6 +63,12 @@ void pwm_config_set_encoder_delta_tenths(uint8_t tenths_1_or_10);
 uint8_t pwm_config_get_concha(void);
 void pwm_config_set_concha(uint8_t zero_or_one);
 
+/** NeoPixel-Ring global 0…100 % (GETCONLEDP/SETCONLEDP, JSON conledp) — skaliert alle setPixel-br-Werte */
+uint8_t pwm_config_get_led_ring_brightness_pct(void);
+void pwm_config_set_led_ring_brightness_pct(uint8_t pct_0_to_100);
+/** Roh-Helligkeit (z. B. 25…100) × gespeicherte Ring-% / 100 */
+uint8_t pwm_config_scale_led_ring_brightness(uint8_t base_brightness);
+
 #ifdef __cplusplus
 }
 #endif

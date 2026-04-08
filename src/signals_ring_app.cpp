@@ -89,7 +89,7 @@ static void set_pixel_rg(float rw, uint8_t j)
     const uint8_t g = (uint8_t)lroundf(200.0f * gw);
     const uint8_t b = 0;
     const uint8_t br = (uint8_t)lroundf(90.0f + 15.0f * rw);
-    s_sig->setPixel(j, r, g, b, br);
+    s_sig->setPixel(j, r, g, b, pwm_config_scale_led_ring_brightness(br));
 }
 
 /** Kleiner Öffnungswinkel: Gauß um Richtung — eine Haupt-LED, Nachbarn gedimmt, Drehen bleibt weich */
@@ -163,7 +163,7 @@ void signals_ring_app_loop(uint32_t now_ms)
 
     if (rotor_error_app_is_fault_ring_red()) {
         for (uint8_t i = 0; i < s_n; i++) {
-            s_sig->setPixel(i, 255, 0, 0, 100);
+            s_sig->setPixel(i, 255, 0, 0, pwm_config_scale_led_ring_brightness(100));
         }
         s_sig->show();
         return;
@@ -180,9 +180,9 @@ void signals_ring_app_loop(uint32_t now_ms)
         for (uint8_t i = 0; i < s_n; i++) {
             const bool on = (i == (uint8_t)phase) || (i == (uint8_t)((phase + 1u) % s_n));
             if (on) {
-                s_sig->setPixel(i, 255, 80, 0, 100);
+                s_sig->setPixel(i, 255, 80, 0, pwm_config_scale_led_ring_brightness(100));
             } else {
-                s_sig->setPixel(i, 20, 5, 0, 25);
+                s_sig->setPixel(i, 20, 5, 0, pwm_config_scale_led_ring_brightness(25));
             }
         }
     } else if (ref) {
@@ -195,7 +195,7 @@ void signals_ring_app_loop(uint32_t now_ms)
         }
     } else {
         for (uint8_t i = 0; i < s_n; i++) {
-            s_sig->setPixel(i, 80, 25, 0, 40);
+            s_sig->setPixel(i, 80, 25, 0, pwm_config_scale_led_ring_brightness(40));
         }
     }
 

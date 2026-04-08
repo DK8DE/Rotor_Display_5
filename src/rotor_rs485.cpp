@@ -12,6 +12,7 @@
  * GETCONANO/SETCONANO: Anemometer/Wetter-Tab (1/0) in config.json; bei 0 weiter GETTEMPA (Außentemp Rotor-Info).
  * GETCONDELTA/SETCONDELTA: Encoder-Schritt 1 oder 10 Zehntelgrad (0,1° bzw. 1° pro Raste) → config encoder_delta.
  * GETCONCHA/SETCONCHA: Antennenwechsel 1 = taget behalten + SETPOS, 0 = taget = Ist-Anzeige (config concha).
+ * GETCONLEDP/SETCONLEDP: NeoPixel-Ring global 0…100 % (config.json conledp auf FFat).
  * GETTEMPM zyklisch alle ROTOR_MOTOR_TEMP_POLL_MS (5 s); Wetter-GETs unverändert gestaffelt.
  *
  * Verbindung: Fehler 10 (Verbindungstimeout), wenn länger kein Telegramm vom Slave (SRC=Rotor-ID)
@@ -1362,6 +1363,32 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
         pwm_config_save();
         s_pending_config_changed_from_bus = true;
         config_reply_ack_u8(src, "ACK_SETCONCHA", pwm_config_get_concha());
+        return true;
+    }
+
+    if (strstr(line, ":GETCONLEDP:")) {
+        if (!CFG_TRY_TAG(":GETCONLEDP:")) {
+            config_reply_nak(src, "NAK_GETCONLEDP", 2);
+            return true;
+        }
+        config_reply_ack_u8(src, "ACK_GETCONLEDP", pwm_config_get_led_ring_brightness_pct());
+        return true;
+    }
+
+    if (strstr(line, ":SETCONLEDP:")) {
+        if (!CFG_TRY_TAG(":SETCONLEDP:")) {
+            config_reply_nak(src, "NAK_SETCONLEDP", 2);
+            return true;
+        }
+        unsigned v = 0;
+        if (sscanf(par, "%u", &v) != 1 || v > 100u) {
+            config_reply_nak(src, "NAK_SETCONLEDP", 1);
+            return true;
+        }
+        pwm_config_set_led_ring_brightness_pct((uint8_t)v);
+        pwm_config_save();
+        s_pending_config_changed_from_bus = true;
+        config_reply_ack_u8(src, "ACK_SETCONLEDP", pwm_config_get_led_ring_brightness_pct());
         return true;
     }
 

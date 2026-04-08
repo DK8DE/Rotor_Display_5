@@ -26,6 +26,8 @@ static uint8_t s_anemometer = 1;
 static uint8_t s_encoder_delta_tenths = 1;
 /** GETCONCHA/SETCONCHA — Antennenwechsel: 1 = taget behalten, 0 = taget = Ist-Anzeige */
 static uint8_t s_concha = 1;
+/** GETCONLEDP/SETCONLEDP — NeoPixel-Ring global 0…100 % */
+static uint8_t s_led_ring_brightness_pct = 100;
 
 static char s_ant_label[3][48];
 static uint8_t s_last_antenna = 1;
@@ -119,6 +121,7 @@ void pwm_config_load_defaults(void)
     s_anemometer = 1;
     s_encoder_delta_tenths = 1;
     s_concha = 1;
+    s_led_ring_brightness_pct = 100;
 }
 
 void pwm_config_load(void)
@@ -186,6 +189,10 @@ void pwm_config_load(void)
     if (ch == 0 || ch == 1) {
         s_concha = (uint8_t)ch;
     }
+    int ledb = parse_int_after_key(buf, "conledp");
+    if (ledb >= 0 && ledb <= 100) {
+        s_led_ring_brightness_pct = (uint8_t)ledb;
+    }
 }
 
 void pwm_config_save(void)
@@ -213,11 +220,13 @@ void pwm_config_save(void)
              "  \"lsl\": %u,\n"
              "  \"anemometer\": %u,\n"
              "  \"encoder_delta\": %u,\n"
-             "  \"concha\": %u\n"
+             "  \"concha\": %u,\n"
+             "  \"conledp\": %u\n"
              "}\n",
              (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_master_id, (unsigned)s_rotor_id, e1, e2, e3,
              (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol,
-             (unsigned)s_anemometer, (unsigned)s_encoder_delta_tenths, (unsigned)s_concha);
+             (unsigned)s_anemometer, (unsigned)s_encoder_delta_tenths, (unsigned)s_concha,
+             (unsigned)s_led_ring_brightness_pct);
     f.print(line);
     f.close();
 }
@@ -394,4 +403,22 @@ void pwm_config_set_concha(uint8_t zero_or_one)
     if (zero_or_one <= 1u) {
         s_concha = zero_or_one;
     }
+}
+
+uint8_t pwm_config_get_led_ring_brightness_pct(void)
+{
+    return s_led_ring_brightness_pct;
+}
+
+void pwm_config_set_led_ring_brightness_pct(uint8_t pct_0_to_100)
+{
+    if (pct_0_to_100 <= 100u) {
+        s_led_ring_brightness_pct = pct_0_to_100;
+    }
+}
+
+uint8_t pwm_config_scale_led_ring_brightness(uint8_t base_brightness)
+{
+    const uint32_t v = (uint32_t)base_brightness * (uint32_t)s_led_ring_brightness_pct / 100u;
+    return (uint8_t)((v > 255u) ? 255u : v);
 }

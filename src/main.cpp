@@ -61,7 +61,7 @@ static void signals_play_boot_welcome()
     g_signals.clear();
     for (uint8_t i = 0; i < SIGNALS_NUM_LEDS; i++) {
         g_signals.clear();
-        g_signals.setPixel(i, 0, 0, 255, 100);
+        g_signals.setPixel(i, 0, 0, 255, pwm_config_scale_led_ring_brightness(100));
         g_signals.show();
         delay(95);
     }
@@ -239,17 +239,18 @@ void setup()
                   FIRMWARE_APP_COPYRIGHT);
     serial_bridge::begin();
 
-    Serial.println("Signals boot (TX GPIO40) …");
-    signals_play_boot_welcome();
-    touch_feedback_set_signals(&g_signals);
-    Serial.println("Initializing board");
-    /* FFat (partitions.csv: ffat) — muss vor LVGL, damit S:/img/… über LV_FS_STDIO funktioniert */
+    /* FFat vor Signals-Boot: pwm_config (conledp u. a.) liegt auf /config.json */
     if (!FFat.begin(true, "/ffat", 10, "ffat")) {
         Serial.println("FFat mount failed — Bilder unter /ffat/img/ sind nicht erreichbar");
     } else {
         Serial.printf("FFat OK, %.1f KB free\n", FFat.freeBytes() / 1024.0f);
     }
     pwm_config_load();
+
+    Serial.println("Signals boot (TX GPIO40) …");
+    signals_play_boot_welcome();
+    touch_feedback_set_signals(&g_signals);
+    Serial.println("Initializing board");
     // esp_log_level_set("*", ESP_LOG_NONE);
   
   // Initialize UART0
