@@ -17,8 +17,13 @@
 #ifndef ROTOR_ERR_LED_BLINK_MS
 #define ROTOR_ERR_LED_BLINK_MS 400u
 #endif
+/* Sehr kurze Verbindungstimeout-Glitches (10) nicht sofort als roten Ring anzeigen. */
+#ifndef ROTOR_ERR10_RING_DELAY_MS
+#define ROTOR_ERR10_RING_DELAY_MS 900u
+#endif
 
 static int s_err_code = 0;
+static uint32_t s_err_set_ms = 0;
 static uint32_t s_led_blink_last_ms = 0;
 static bool s_led_blink_bright = true;
 /** Wechsel Fehlertext / „Bitte Neustart“ pro Sekunde */
@@ -143,6 +148,7 @@ static void apply_homing_led_fault(uint32_t now_ms)
 void rotor_error_app_init(void)
 {
     s_err_code = 0;
+    s_err_set_ms = 0;
     s_led_blink_last_ms = 0;
     s_led_blink_bright = true;
     s_meldetext_last_alternate_sec = UINT32_MAX;
@@ -160,6 +166,9 @@ void rotor_error_app_set_error_code(int code)
     if (code == 0 && s_err_code != 0 && s_err_code != 10) {
         return;
     }
+    if (s_err_code != code) {
+        s_err_set_ms = millis();
+    }
     s_err_code = code;
     if (code != 0) {
         s_meldetext_last_alternate_sec = UINT32_MAX;
@@ -176,7 +185,13 @@ int rotor_error_app_get_error_code(void)
 
 bool rotor_error_app_is_fault_ring_red(void)
 {
-    return s_err_code != 0;
+    if (s_err_code == 0) {
+        return false;
+    }
+    if (s_err_code == 10) {
+        return (uint32_t)(millis() - s_err_set_ms) >= ROTOR_ERR10_RING_DELAY_MS;
+    }
+    return true;
 }
 
 bool rotor_error_app_is_fault_locked(void)

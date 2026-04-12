@@ -89,17 +89,9 @@ extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3);
 #define ROTOR_PERIODIC_GETREF_MS 5000u
 #endif
 
-#ifndef ROTOR_POLL_GETERR_MS
-/** GETERR zyklisch — wie periodisches GETREF (5 s), nicht Bus fluten */
-#define ROTOR_POLL_GETERR_MS 5000u
-#endif
-/** GETERR bei Timeout: maximal so viele Wiederholungen vor Cooldown. */
+/** GETERR bei Timeout: maximal so viele Wiederholungen vor Cooldown (nur fuer manuelle GETERR-Abfragen). */
 #ifndef ROTOR_GETERR_MAX_RETRIES
 #define ROTOR_GETERR_MAX_RETRIES 1u
-#endif
-/** Fehler-10-Recovery: GETERR deutlich langsamer als Poll-Gap, sonst Burst bei instabilem Bus. */
-#ifndef ROTOR_CONN_RECOVERY_GETERR_MS
-#define ROTOR_CONN_RECOVERY_GETERR_MS 1000u
 #endif
 
 /** Kein Fremd-Master → Rotor mehr so lange → eigenes GET-Polling wieder an */
@@ -110,7 +102,7 @@ extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3);
 /** Referenz + Betrieb: keine Antwort vom Rotor (Slave) seit so lang → Fehler 10 Verbindungstimeout
  * (gilt auch wenn nur der PC fragt und der Controller selbst nicht sendet). */
 #ifndef ROTOR_CONN_LOST_TIMEOUT_MS
-#define ROTOR_CONN_LOST_TIMEOUT_MS 5000u
+#define ROTOR_CONN_LOST_TIMEOUT_MS 5500u
 #endif
 /** Bei ausstehendem SETPOSDG ACK darf der Link-Watchdog nicht sofort auf Fehler 10 springen. */
 #ifndef ROTOR_CONN_LOST_TIMEOUT_SETPOSDG_MS
@@ -211,8 +203,6 @@ static bool s_slave_referenced = false;
 static float s_last_pos_ui_deg = 0.0f;
 /** GETREF alle ROTOR_PERIODIC_GETREF_MS nach Boot, solange kein Homing-Polling */
 static uint32_t s_next_periodic_getref_ms = 0;
-/** GETERR zyklisch (Fehlercode / Betriebsbereit) */
-static uint32_t s_next_geterr_ms = 0;
 
 /** SETPOSCC: zuletzt gewünschter Busgrad — Versand erst in rotor_rs485_loop bei freiem Pending (kein TX vor ACK/GETPOS). */
 static bool s_setposcc_queued = false;
@@ -247,8 +237,6 @@ static uint32_t s_last_slave_rx_ms = 0;
 static bool s_have_slave_rx_ever = false;
 /** Start Uhr „keine Slave-Antwort“: erster GETREF (Boot) oder erster Befehl Richtung Slave (PC) */
 static uint32_t s_conn_watch_start_ms = 0;
-/** GETERR-Recovery nach Fehler 10 (eigenes Intervall, um Bus-Bursts zu vermeiden). */
-static uint32_t s_next_conn_recovery_getref_ms = 0;
 
 /** Nächster Wetter-GET (nur ohne PC, Stillstand); 0=ANEMO, 1=TEMPA, 2=WINDDIR */
 static uint32_t s_next_weather_ms = 0;
@@ -1592,9 +1580,8 @@ static void on_ack_timeout()
             send_request("GETERR", "0", Pending::GetErr);
             s_geterr_retry_count++;
         } else {
-            /* Kein GETERR-Sturm: Pending beenden und erst beim naechsten Poll-Intervall erneut versuchen. */
+            /* Kein GETERR-Sturm: Pending beenden; naechster Versuch nur bei explizitem Aufruf. */
             clear_pending();
-            s_next_geterr_ms = millis() + ROTOR_POLL_GETERR_MS;
         }
         break;
     case Pending::SetPwm: {
@@ -1640,7 +1627,6 @@ static void on_ack_timeout()
             s_boot_test_done = true;
             rotor_error_app_set_error_code(10);
             stop_fault_motion_polling();
-            s_next_conn_recovery_getref_ms = millis() - ROTOR_CONN_RECOVERY_GETERR_MS;
         } else {
             send_request("TEST", "0", Pending::Test);
         }
@@ -2248,6 +2234,12 @@ static void process_complete_line(const char *line, size_t len)
 
     /* Broadcast DST=255: SETCONIDF / SETCONTID → neue master_id (config.json), wenn Controller-ID unbekannt */
     if (dst == ROTOR_RS485_BROADCAST_ID) {
+        /* Neuer Fehlerkanal: Rotor sendet asynchron ERR an Broadcast (#<rotor>:255:ERR:<code>:...). */
+        if (src == (unsigned)s_slave_id && parse_slave_err(line)) {
+            s_last_slave_rx_ms = millis();
+            s_have_slave_rx_ever = true;
+            return;
+        }
         if (strstr(line, ":SETCONIDF:") || strstr(line, ":SETCONTID:")) {
             handle_broadcast_set_controller_master_id(line, src);
             return;
@@ -2270,6 +2262,11 @@ static void process_complete_line(const char *line, size_t len)
     if (src == (unsigned)s_slave_id) {
         s_last_slave_rx_ms = millis();
         s_have_slave_rx_ever = true;
+        /* Ohne zyklisches GETERR: Verbindungstimeout(10) bei erster gueltiger Slave-Zeile aufheben.
+         * Echte Fehler kommen asynchron als ERR und setzen den Fehlercode danach wieder. */
+        if (rotor_error_app_get_error_code() == 10 && !strstr(line, ":ERR:")) {
+            rotor_error_app_set_error_code(0);
+        }
         if (parse_slave_err(line)) {
             return;
         }
@@ -2390,13 +2387,11 @@ void rotor_rs485_init(void)
     s_last_slave_rx_ms = 0;
     s_have_slave_rx_ever = false;
     s_conn_watch_start_ms = 0;
-    s_next_conn_recovery_getref_ms = 0;
     s_boot_earliest_ms = millis() + ROTOR_BOOT_QUERY_DELAY_MS;
     s_boot_done = false;
     s_boot_phase = 0;
     s_startup_err_known = false;
     s_next_periodic_getref_ms = millis() + ROTOR_PERIODIC_GETREF_MS;
-    s_next_geterr_ms = millis() + ROTOR_POLL_GETERR_MS;
     s_hw_snap_retarget_active = false;
     s_antenna_boot_pending = true;
     s_antenna_boot_phase = 0;
@@ -2427,7 +2422,7 @@ static void try_boot_test(void)
     send_request("TEST", "0", Pending::Test);
 }
 
-/** Einmal GETERR nach TEST und Wartezeit, bevor das erste GETREF die Referenz setzt (Fehler vor „Bereit“). */
+/** Nach TEST: Startzustand als bekannt markieren, ohne zusaetzliches GETERR-Polling. */
 static void try_boot_startup_geterr(void)
 {
     if (s_startup_err_known || s_boot_done) {
@@ -2442,7 +2437,7 @@ static void try_boot_startup_geterr(void)
     if (s_boot_phase != 0) {
         return;
     }
-    send_request("GETERR", "0", Pending::GetErr);
+    s_startup_err_known = true;
 }
 
 static void try_boot_getref()
@@ -2565,7 +2560,6 @@ void rotor_rs485_loop(void)
             rotor_error_app_set_error_code(10);
             stop_fault_motion_polling();
             s_foreign_master_src_id = 0;
-            s_next_conn_recovery_getref_ms = millis() - ROTOR_CONN_RECOVERY_GETERR_MS;
             return;
         }
     }
@@ -2589,14 +2583,8 @@ void rotor_rs485_loop(void)
         return;
     }
 
-    /* Fehler 10: GETERR (nicht GETREF) — Slave kann ref=1 melden, obwohl GETERR ≠ 0 (kein Flackern „Betriebsbereit“). */
+    /* Fehler 10: keine zyklischen GETERR-Abfragen mehr; Aufhebung bei eingehender Slave-Antwort im Parser. */
     if (rotor_error_app_get_error_code() == 10) {
-        if (!rotor_rs485_is_foreign_pc_listen_mode()) {
-            if ((int32_t)(millis() - s_next_conn_recovery_getref_ms) >= 0) {
-                send_request("GETERR", "0", Pending::GetErr);
-                s_next_conn_recovery_getref_ms = millis() + ROTOR_CONN_RECOVERY_GETERR_MS;
-            }
-        }
         return;
     }
 
@@ -2653,13 +2641,6 @@ void rotor_rs485_loop(void)
     if (s_boot_done && (int32_t)(millis() - s_next_periodic_getref_ms) >= 0) {
         send_request("GETREF", "0", Pending::GetRef);
         s_next_periodic_getref_ms = millis() + ROTOR_PERIODIC_GETREF_MS;
-        return;
-    }
-
-    if (s_boot_done && (int32_t)(millis() - s_next_geterr_ms) >= 0) {
-        s_geterr_retry_count = 0;
-        send_request("GETERR", "0", Pending::GetErr);
-        s_next_geterr_ms = millis() + ROTOR_POLL_GETERR_MS;
         return;
     }
 
