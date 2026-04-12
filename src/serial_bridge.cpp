@@ -47,15 +47,23 @@ static constexpr uint32_t kTurnaroundMicros = 250;
  * @ 115200 — groessere Marge fuer MAX485/Slave-Umschaltung (sonst lange GETREF-Timeouts).
  */
 static constexpr uint32_t kBusIdleUs = 12000;
+/** SETPOSCC-Priorität: deutlich kürzere Mindest-Stille vor Senden. */
+static constexpr uint32_t kBusIdleUsPriority = 1800;
 
 /** Max. Warten auf Bus-Idle (ms); muss deutlich > kBusIdleUs sein, sonst Senden ohne Pause. */
 static constexpr uint32_t kBusIdleWaitCapMs = 200;
+static constexpr uint32_t kBusIdleWaitCapPriorityMs = 35;
 
 static HardwareSerial *s_hw = &Serial2;
 static uint32_t s_baud = 115200;
 
 /** Zeitstempel der letzten Bus-Aktivität (TX oder RX), micros(). */
 static uint32_t s_last_bus_activity_us = 0;
+
+/** Ausstehende USB-Spiegel-Bytes (verlustfrei, auch wenn CDC kurz voll ist). */
+static constexpr size_t kUsbMirrorPendingCap = 12288;
+static uint8_t s_usb_mirror_pending[kUsbMirrorPendingCap];
+static size_t s_usb_mirror_pending_len = 0;
 
 void set_baud(uint32_t baud) { s_baud = baud; }
 
@@ -83,23 +91,65 @@ void uart_unlock()
     }
 }
 
-/** USB-Monitor: nur bis Puffer frei — nie blockieren (ohne PC-Leser: sonst Parser/Anzeige verzögert). */
+static void mirror_usb_pending_push(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0) {
+        return;
+    }
+    if (len >= kUsbMirrorPendingCap) {
+        data += (len - kUsbMirrorPendingCap);
+        len = kUsbMirrorPendingCap;
+        s_usb_mirror_pending_len = 0;
+    } else if (s_usb_mirror_pending_len + len > kUsbMirrorPendingCap) {
+        const size_t drop = s_usb_mirror_pending_len + len - kUsbMirrorPendingCap;
+        if (drop >= s_usb_mirror_pending_len) {
+            s_usb_mirror_pending_len = 0;
+        } else {
+            memmove(s_usb_mirror_pending, s_usb_mirror_pending + drop, s_usb_mirror_pending_len - drop);
+            s_usb_mirror_pending_len -= drop;
+        }
+    }
+    memcpy(s_usb_mirror_pending + s_usb_mirror_pending_len, data, len);
+    s_usb_mirror_pending_len += len;
+}
+
+static void drain_usb_mirror_pending_to_cdc()
+{
+    while (s_usb_mirror_pending_len > 0) {
+        const int space = Serial.availableForWrite();
+        if (space <= 0) return;
+        const size_t chunk = (size_t)space < s_usb_mirror_pending_len ? (size_t)space : s_usb_mirror_pending_len;
+        const size_t w = Serial.write(s_usb_mirror_pending, chunk);
+        if (w == 0) {
+            return;
+        }
+        if (w < s_usb_mirror_pending_len) {
+            memmove(s_usb_mirror_pending, s_usb_mirror_pending + w, s_usb_mirror_pending_len - w);
+        }
+        s_usb_mirror_pending_len -= w;
+    }
+}
+
+/** USB-Monitor: nonblocking, Überhang in Pending-FIFO statt Drop. */
 static void mirror_usb_nonblocking(const uint8_t *data, size_t len)
 {
     if (!data || len == 0) {
         return;
     }
+    drain_usb_mirror_pending_to_cdc();
     size_t off = 0;
     while (off < len) {
         const int space = Serial.availableForWrite();
         if (space <= 0) {
-            break;
+            mirror_usb_pending_push(data + off, len - off);
+            return;
         }
         const size_t chunk =
             (size_t)space < (len - off) ? (size_t)space : (len - off);
         const size_t w = Serial.write(data + off, chunk);
         if (w == 0) {
-            break;
+            mirror_usb_pending_push(data + off, len - off);
+            return;
         }
         off += w;
     }
@@ -133,9 +183,9 @@ static void drain_hw_rx_quick()
  * Vor Controller-Telegramm (GETREF, GETPOS, …): gleiche Idle-Regel wie bei USB->Bus,
  * damit nicht im selben loop()-Takt direkt nach Slave-TX wieder gesendet wird.
  */
-static void wait_bus_idle_for_controller_tx()
+static void wait_bus_idle_for_controller_tx(uint32_t min_idle_us, uint32_t cap_ms)
 {
-    const uint32_t deadline_ms = millis() + kBusIdleWaitCapMs;
+    const uint32_t deadline_ms = millis() + cap_ms;
     for (;;) {
         drain_hw_rx_quick();
 
@@ -148,13 +198,13 @@ static void wait_bus_idle_for_controller_tx()
             continue;
         }
 
-        if ((uint32_t)(micros() - s_last_bus_activity_us) >= kBusIdleUs) {
+        if ((uint32_t)(micros() - s_last_bus_activity_us) >= min_idle_us) {
             return;
         }
 
         if ((int32_t)(millis() - deadline_ms) >= 0) {
             /* Kein volles Idle erreicht (z. B. Dauer-RX): trotzdem Mindestluecke erzwingen */
-            delayMicroseconds(kBusIdleUs);
+            delayMicroseconds(min_idle_us);
             return;
         }
 
@@ -168,7 +218,27 @@ void hw_send(const uint8_t *data, size_t len)
     if (!data || len == 0) {
         return;
     }
-    wait_bus_idle_for_controller_tx();
+    wait_bus_idle_for_controller_tx(kBusIdleUs, kBusIdleWaitCapMs);
+
+    uart_lock();
+    dir_transmit();
+    s_hw->write(data, len);
+    s_hw->flush();
+    if (kTurnaroundMicros) {
+        delayMicroseconds(kTurnaroundMicros);
+    }
+    dir_receive();
+    uart_unlock();
+    s_last_bus_activity_us = micros();
+    mirror_usb_nonblocking(data, len);
+}
+
+void hw_send_priority(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0) {
+        return;
+    }
+    wait_bus_idle_for_controller_tx(kBusIdleUsPriority, kBusIdleWaitCapPriorityMs);
 
     uart_lock();
     dir_transmit();
@@ -274,9 +344,11 @@ static void pump_hw_to_usb_and_parser()
 
 void poll()
 {
+    drain_usb_mirror_pending_to_cdc();
     /* ERST Bus leeren (Rotor-Antworten), DANN (nur wenn Bus idle) PC-Daten senden. */
     pump_hw_to_usb_and_parser();
     pump_usb_to_hw();
+    drain_usb_mirror_pending_to_cdc();
     yield();
 }
 

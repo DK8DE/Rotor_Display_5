@@ -62,6 +62,8 @@ public:
   */
   void tone(uint16_t freq, uint8_t vol, uint16_t durationMs = 0);
   void stopTone();
+  /** Atomarer Piep: sendet X + T ohne Unterbrechung durch andere Sender. */
+  void restartTone(uint16_t freq, uint8_t vol, uint16_t durationMs = 0);
 
 private:
   HardwareSerial& _serial;

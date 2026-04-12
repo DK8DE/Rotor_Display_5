@@ -54,6 +54,8 @@ static constexpr uint32_t ENCODER_BUS_RETRY_MS = 50;
 /** Pause ohne neuen Tick bis SETPOS. War 1400 ms (langsam drehen); Ziel: ~1/3 für schnellere Busreaktion,
  *  Fallback Session-Start nutzt s_encoder_target_deg (kein Arc-1°-Verlust) bleibt aktiv. */
 static constexpr uint32_t ENCODER_SEND_IDLE_MS = 670;
+/** Bei aktivem Fremd-PC-Verkehr: finalen Encoder-SETPOSDG früher senden, damit Soll->Fahrt enger zusammenliegt. */
+static constexpr uint32_t ENCODER_SEND_IDLE_MS_FOREIGN_PC = 240;
 /** true: wie Touch am Arc — Drehen zeigt Soll am Arc; vor SETPOSDG Arc auf Ist (Startlage), dann Fahrt */
 static constexpr bool ENCODER_MOVES_ARC = true;
 
@@ -94,18 +96,6 @@ static void pwm_style_slow_fast(bool fast_active)
     }
 }
 
-/** Pieps bei Finger-Druck (PRESSED) — zuverlässiger als CLICKED (Letzteres fehlt z. B. bei Tab-Scroll/Noise). */
-static void on_ui_button_press_beep(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_PRESSED) {
-        return;
-    }
-    if (rotor_error_app_is_fault_locked()) {
-        return;
-    }
-    touch_feedback_button_click();
-}
-
 static void on_slow_btn(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
@@ -114,6 +104,7 @@ static void on_slow_btn(lv_event_t *e)
     if (rotor_error_app_is_fault_locked()) {
         return;
     }
+    touch_feedback_button_click();
     s_pwm_ui_is_fast = false;
     pwm_config_set_pwm_ui_fast(0);
     pwm_config_save();
@@ -132,6 +123,7 @@ static void on_fast_btn(lv_event_t *e)
     if (rotor_error_app_is_fault_locked()) {
         return;
     }
+    touch_feedback_button_click();
     s_pwm_ui_is_fast = true;
     pwm_config_set_pwm_ui_fast(1);
     pwm_config_save();
@@ -189,6 +181,7 @@ static void on_antenna_btn(lv_event_t *e)
     if (rotor_error_app_is_fault_locked()) {
         return;
     }
+    touch_feedback_button_click();
     lv_obj_t *btn = lv_event_get_target(e);
     uint8_t n = 1;
     if (btn == objects.antenna_2) {
@@ -256,6 +249,7 @@ static void on_encoder_delta_btn(lv_event_t *e)
     if (rotor_error_app_is_fault_locked()) {
         return;
     }
+    touch_feedback_button_click();
     const uint8_t cur = pwm_config_get_encoder_delta_tenths();
     const uint8_t next = (cur >= 10u) ? 1u : 10u;
     pwm_config_set_encoder_delta_tenths(next);
@@ -761,16 +755,10 @@ static void on_target_deg(float bus_deg)
     /* Während Encoder aktiv ist: Bus darf taget_dg NICHT überschreiben.
      * Sonst überschreibt z. B. „Ankunft am alten SETPOS“ (notify_target(s_goto_commanded_deg))
      * einen bereits weiter gedrehten Soll — wirkt wie „1. Klick fehlt“ / falsches Ziel.
-     * Ausnahme: SETPOSDG von anderem Master (Mithören) — explizite PC-Fahrt, Session beenden. */
+     * Auch fremde SETPOSDG-Bewegungen beenden die lokale Encoder-Session hier nicht mehr:
+     * der Controller muss nach Encoder-Ruhe sein eigenes finales SETPOSDG senden. */
     if (s_encoder_adjusting) {
-        if (rotor_rs485_is_remote_setpos_motion()) {
-            s_encoder_adjusting = false;
-            s_encoder_goto_retry_pending = false;
-            s_encoder_retry_deadline_ms = 0;
-            s_encoder_idle_deadline_ms = 0;
-        } else {
-            return;
-        }
+        return;
     }
     /* loop(): serial_bridge/RS485 vor encoder_process_pending — alter Bus-Soll sonst vor dem Encoder-Tick. */
     if (rotor_encoder_pending_detents() != 0) {
@@ -815,7 +803,8 @@ static void on_target_deg(float bus_deg)
         }
         constexpr uint32_t kBusTargetOneTenthLagProtectMs = 4500u;
         if (!rotor_rs485_is_remote_setpos_motion() &&
-            (uint32_t)(millis() - s_last_encoder_step_ms) < kBusTargetOneTenthLagProtectMs && d == -1) {
+            (uint32_t)(millis() - s_last_encoder_step_ms) < kBusTargetOneTenthLagProtectMs &&
+            (d == -1 || d == 1)) {
             return;
         }
     }
@@ -948,30 +937,24 @@ extern "C" void rotor_app_init(void)
     s_pwm_ui_is_fast = pwm_config_get_pwm_ui_fast() != 0;
     pwm_style_slow_fast(s_pwm_ui_is_fast);
     if (objects.slow) {
-        lv_obj_add_event_cb(objects.slow, on_ui_button_press_beep, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(objects.slow, on_slow_btn, LV_EVENT_CLICKED, nullptr);
     }
     if (objects.fast) {
-        lv_obj_add_event_cb(objects.fast, on_ui_button_press_beep, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(objects.fast, on_fast_btn, LV_EVENT_CLICKED, nullptr);
     }
     if (objects.encoder_delta_bu) {
-        lv_obj_add_event_cb(objects.encoder_delta_bu, on_ui_button_press_beep, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(objects.encoder_delta_bu, on_encoder_delta_btn, LV_EVENT_CLICKED, nullptr);
     }
     encoder_delta_apply_button_label();
     antenna_apply_labels_from_config();
     antenna_apply_style(pwm_config_get_last_antenna());
     if (objects.antenna_1) {
-        lv_obj_add_event_cb(objects.antenna_1, on_ui_button_press_beep, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(objects.antenna_1, on_antenna_btn, LV_EVENT_CLICKED, nullptr);
     }
     if (objects.antenna_2) {
-        lv_obj_add_event_cb(objects.antenna_2, on_ui_button_press_beep, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(objects.antenna_2, on_antenna_btn, LV_EVENT_CLICKED, nullptr);
     }
     if (objects.antenna_3) {
-        lv_obj_add_event_cb(objects.antenna_3, on_ui_button_press_beep, LV_EVENT_PRESSED, nullptr);
         lv_obj_add_event_cb(objects.antenna_3, on_antenna_btn, LV_EVENT_CLICKED, nullptr);
     }
     /* Windpfeil: EEZ (screens.c) unverändert lassen — REAL+lv_img_set_angle clippt falsch (1px-Strich).
@@ -1086,7 +1069,10 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
     /* Kein Telegramm während Drehen: Pause neu starten; ausstehenden Bus-Retry verwirft neuer Takt */
     s_encoder_goto_retry_pending = false;
     s_encoder_retry_deadline_ms = 0;
-    s_encoder_idle_deadline_ms = millis() + ENCODER_SEND_IDLE_MS;
+    const uint32_t idle_ms = rotor_rs485_is_foreign_pc_listen_mode()
+        ? ENCODER_SEND_IDLE_MS_FOREIGN_PC
+        : ENCODER_SEND_IDLE_MS;
+    s_encoder_idle_deadline_ms = millis() + idle_ms;
     s_last_encoder_step_ms = millis();
 }
 

@@ -27,6 +27,7 @@
 static Signals *s_sig = nullptr;
 static uint8_t s_n = 16;
 static uint32_t s_last_draw_ms = 0;
+static uint32_t s_pause_until_ms = 0;
 
 static float normalize_deg_for_led(float deg)
 {
@@ -146,14 +147,27 @@ void signals_ring_app_init(Signals *signals, uint8_t num_leds)
     s_sig = signals;
     s_n = num_leds ? num_leds : 16;
     s_last_draw_ms = 0;
+    s_pause_until_ms = 0;
     if (s_sig) {
         s_sig->setAutoShow(false);
+    }
+}
+
+void signals_ring_app_pause_updates_for(uint16_t hold_ms)
+{
+    const uint32_t now = millis();
+    const uint32_t until = now + (uint32_t)hold_ms;
+    if ((int32_t)(until - s_pause_until_ms) > 0) {
+        s_pause_until_ms = until;
     }
 }
 
 void signals_ring_app_loop(uint32_t now_ms)
 {
     if (!s_sig || s_n == 0) {
+        return;
+    }
+    if ((int32_t)(now_ms - s_pause_until_ms) < 0) {
         return;
     }
     if ((uint32_t)(now_ms - s_last_draw_ms) < SIGNALS_RING_MIN_INTERVAL_MS) {

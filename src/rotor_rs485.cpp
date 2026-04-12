@@ -63,6 +63,14 @@ extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3);
 #ifndef ROTOR_RS485_ACK_TIMEOUT_MS
 #define ROTOR_RS485_ACK_TIMEOUT_MS 500u
 #endif
+/** SETPOSDG-ACK kommt bei hoher Fremdlast oft spaeter als 500 ms -> sonst unnoetiger Doppelversand. */
+#ifndef ROTOR_RS485_SETPOSDG_ACK_TIMEOUT_MS
+#define ROTOR_RS485_SETPOSDG_ACK_TIMEOUT_MS 1200u
+#endif
+/** Max. Wiederholungen bei fehlendem ACK_SETPOSDG (0 = kein Retry, 1 = genau ein Retry). */
+#ifndef ROTOR_RS485_SETPOSDG_MAX_RETRIES
+#define ROTOR_RS485_SETPOSDG_MAX_RETRIES 1u
+#endif
 
 #ifndef ROTOR_BOOT_QUERY_DELAY_MS
 #define ROTOR_BOOT_QUERY_DELAY_MS 2000u
@@ -85,6 +93,14 @@ extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3);
 /** GETERR zyklisch — wie periodisches GETREF (5 s), nicht Bus fluten */
 #define ROTOR_POLL_GETERR_MS 5000u
 #endif
+/** GETERR bei Timeout: maximal so viele Wiederholungen vor Cooldown. */
+#ifndef ROTOR_GETERR_MAX_RETRIES
+#define ROTOR_GETERR_MAX_RETRIES 1u
+#endif
+/** Fehler-10-Recovery: GETERR deutlich langsamer als Poll-Gap, sonst Burst bei instabilem Bus. */
+#ifndef ROTOR_CONN_RECOVERY_GETERR_MS
+#define ROTOR_CONN_RECOVERY_GETERR_MS 1000u
+#endif
 
 /** Kein Fremd-Master → Rotor mehr so lange → eigenes GET-Polling wieder an */
 #ifndef ROTOR_PC_FOREIGN_SILENCE_MS
@@ -95,6 +111,10 @@ extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3);
  * (gilt auch wenn nur der PC fragt und der Controller selbst nicht sendet). */
 #ifndef ROTOR_CONN_LOST_TIMEOUT_MS
 #define ROTOR_CONN_LOST_TIMEOUT_MS 5000u
+#endif
+/** Bei ausstehendem SETPOSDG ACK darf der Link-Watchdog nicht sofort auf Fehler 10 springen. */
+#ifndef ROTOR_CONN_LOST_TIMEOUT_SETPOSDG_MS
+#define ROTOR_CONN_LOST_TIMEOUT_SETPOSDG_MS 5000u
 #endif
 
 /** Abstand zwischen GETANEMO / GETTEMPA / GETWINDDIR (zyklisch); jede Größe alle 3 s */
@@ -153,6 +173,8 @@ static uint8_t s_weather_dirty_mask = 0;
 
 static Pending s_pending = Pending::None;
 static uint32_t s_pending_since_ms = 0;
+static uint8_t s_setposdg_retry_count = 0;
+static uint8_t s_geterr_retry_count = 0;
 
 static bool s_poll_ref = false;
 static uint32_t s_next_ref_poll_ms = 0;
@@ -225,7 +247,7 @@ static uint32_t s_last_slave_rx_ms = 0;
 static bool s_have_slave_rx_ever = false;
 /** Start Uhr „keine Slave-Antwort“: erster GETREF (Boot) oder erster Befehl Richtung Slave (PC) */
 static uint32_t s_conn_watch_start_ms = 0;
-/** GETERR-Recovery nach Fehler 10 (Intervall wie ROTOR_POLL_GAP_MS) */
+/** GETERR-Recovery nach Fehler 10 (eigenes Intervall, um Bus-Bursts zu vermeiden). */
 static uint32_t s_next_conn_recovery_getref_ms = 0;
 
 /** Nächster Wetter-GET (nur ohne PC, Stillstand); 0=ANEMO, 1=TEMPA, 2=WINDDIR */
@@ -350,6 +372,11 @@ static bool cc_preview_to_foreign_allowed(void)
 
 static void clear_pending()
 {
+    if (s_pending == Pending::SetPosDg) {
+        s_setposdg_retry_count = 0;
+    } else if (s_pending == Pending::GetErr) {
+        s_geterr_retry_count = 0;
+    }
     s_pending = Pending::None;
     /* SETPOSCC (Encoder-Vorschau): sonst während GETPOSDG-Polling nie flush — PC sieht Soll nicht live. */
     try_flush_setposcc();
@@ -366,7 +393,11 @@ static bool pending_timed_out()
     if (s_pending == Pending::None) {
         return false;
     }
-    return (millis() - s_pending_since_ms) >= ROTOR_RS485_ACK_TIMEOUT_MS;
+    uint32_t timeout_ms = ROTOR_RS485_ACK_TIMEOUT_MS;
+    if (s_pending == Pending::SetPosDg) {
+        timeout_ms = ROTOR_RS485_SETPOSDG_ACK_TIMEOUT_MS;
+    }
+    return (millis() - s_pending_since_ms) >= timeout_ms;
 }
 
 static float normalize_deg_0_360(float d)
@@ -511,7 +542,12 @@ static void send_line_to(uint8_t dst, const char *cmd, const char *params_str)
     format_cs_python(cs, sizeof(cs), cs_val);
     char line[192];
     snprintf(line, sizeof(line), "#%u:%u:%s:%s:%s$", (unsigned)s_master_id, (unsigned)dst, cmd, params_str, cs);
-    serial_bridge::hw_send(reinterpret_cast<const uint8_t *>(line), strlen(line));
+    // SETPOSCC-Vorschau muss bei laufender Fremd-GETPOSDG-Flut sofort raus.
+    if (strcmp(cmd, "SETPOSCC") == 0) {
+        serial_bridge::hw_send_priority(reinterpret_cast<const uint8_t *>(line), strlen(line));
+    } else {
+        serial_bridge::hw_send(reinterpret_cast<const uint8_t *>(line), strlen(line));
+    }
 }
 
 static void send_line(const char *cmd, const char *params_str)
@@ -627,32 +663,31 @@ bool rotor_rs485_send_set_pwm_limit(uint8_t pct)
 
 bool rotor_rs485_goto_degrees(float deg)
 {
-    /* SETPOSDG darf nicht unterbrochen werden. Ein ausstehendes GETPOSDG (Positions-Polling)
-     * blockiert sonst jeden Encoder-Klick: Bus ist „dauernd beschäftigt“, SETPOS wird verworfen
-     * oder stark verzögert — Anzeige und Soll passen nicht mehr zusammen. */
+    /* SETPOSDG hat Vorrang: ausstehende Abfragen sofort abbrechen, damit Encoder-Ziel ohne
+     * GETREF/GETERR/Weather-Wartekette direkt gesendet wird. */
     if (s_pending == Pending::SetPosDg) {
         return false;
     }
-    if (s_pending == Pending::GetPosDg) {
-        clear_pending();
-    }
-    if (s_pending == Pending::GetAnemo || s_pending == Pending::GetTempA ||
-        s_pending == Pending::GetWindDir || s_pending == Pending::GetTempM) {
-        clear_pending();
+    if (s_pending == Pending::SetRef || s_pending == Pending::Stop) {
+        return false;
     }
     if (s_pending == Pending::GetAntOff1 || s_pending == Pending::GetAntOff2 ||
         s_pending == Pending::GetAntOff3) {
         clear_pending();
         abort_antenna_boot();
-    }
-    if (s_pending != Pending::None) {
-        return false;
+    } else if (s_pending == Pending::GetAngle1 || s_pending == Pending::GetAngle2 ||
+               s_pending == Pending::GetAngle3) {
+        clear_pending();
+        abort_angle_boot();
+    } else if (s_pending != Pending::None) {
+        clear_pending();
     }
     float n = normalize_deg_0_360(deg);
     char p[40];
     format_deg_param(p, sizeof(p), n);
     s_target_deg = n;
     s_goto_commanded_deg = n;
+    s_setposdg_retry_count = 0;
     s_poll_pos = true;
     s_pos_grace_end_ms = 0;
     s_next_pos_poll_ms = 0;
@@ -674,8 +709,11 @@ static void try_flush_setposcc(void)
     if (s_foreign_master_src_id == 0) {
         return;
     }
-    char p[40];
-    format_deg_param(p, sizeof(p), s_setposcc_queued_deg);
+    char deg_buf[40];
+    format_deg_param(deg_buf, sizeof(deg_buf), s_setposcc_queued_deg);
+    char p[64];
+    // SETPOSCC-Payload: "<deg>;<rotor_id>" damit der fremde Master den richtigen Rotor zuordnen kann.
+    snprintf(p, sizeof(p), "%s;%u", deg_buf, (unsigned)s_slave_id);
     send_line_to(s_foreign_master_src_id, "SETPOSCC", p);
     s_setposcc_queued = false;
 }
@@ -1529,9 +1567,18 @@ static void on_ack_timeout()
         send_request("GETPOSDG", "0", Pending::GetPosDg);
         break;
     case Pending::SetPosDg: {
-        char p[40];
-        format_deg_param(p, sizeof(p), normalize_deg_0_360(s_goto_commanded_deg));
-        send_request("SETPOSDG", p, Pending::SetPosDg);
+        if (s_setposdg_retry_count < ROTOR_RS485_SETPOSDG_MAX_RETRIES) {
+            char p[40];
+            format_deg_param(p, sizeof(p), normalize_deg_0_360(s_goto_commanded_deg));
+            send_request("SETPOSDG", p, Pending::SetPosDg);
+            s_setposdg_retry_count++;
+        } else {
+            /* Nach max. Retry nicht in SetPosDg-Pending haengen bleiben:
+             * sonst blockiert ein verlorenes ACK dauerhaft alle weiteren Encoder-SETPOSDG. */
+            clear_pending();
+            s_poll_pos = false;
+            s_pos_grace_end_ms = 0;
+        }
         break;
     }
     case Pending::SetRef:
@@ -1541,7 +1588,14 @@ static void on_ack_timeout()
         send_request("STOP", "0", Pending::Stop);
         break;
     case Pending::GetErr:
-        send_request("GETERR", "0", Pending::GetErr);
+        if (s_geterr_retry_count < ROTOR_GETERR_MAX_RETRIES) {
+            send_request("GETERR", "0", Pending::GetErr);
+            s_geterr_retry_count++;
+        } else {
+            /* Kein GETERR-Sturm: Pending beenden und erst beim naechsten Poll-Intervall erneut versuchen. */
+            clear_pending();
+            s_next_geterr_ms = millis() + ROTOR_POLL_GETERR_MS;
+        }
         break;
     case Pending::SetPwm: {
         char p[16];
@@ -1586,7 +1640,7 @@ static void on_ack_timeout()
             s_boot_test_done = true;
             rotor_error_app_set_error_code(10);
             stop_fault_motion_polling();
-            s_next_conn_recovery_getref_ms = millis() - ROTOR_POLL_GAP_MS;
+            s_next_conn_recovery_getref_ms = millis() - ROTOR_CONN_RECOVERY_GETERR_MS;
         } else {
             send_request("TEST", "0", Pending::Test);
         }
@@ -1925,8 +1979,10 @@ static bool parse_ack_getposdg(const char *line)
         s_boot_phase = 3;
     }
 
-    /* Positionsfahrt / Toleranz nur mit Antworten auf unser eigenes GETPOSDG — sonst fremde ACKs stören die State Machine. */
-    if (for_us && s_poll_pos) {
+    /* Positionsfahrt / Toleranz:
+     * - Eigenbetrieb: nur eigene GETPOSDG-ACKs (for_us)
+     * - Mitlaeuferbetrieb: fremde GETPOSDG-ACKs mitnutzen, damit kein zusaetzlicher eigener GETPOSDG-Sturm entsteht. */
+    if (s_poll_pos && (for_us || rotor_rs485_is_foreign_pc_listen_mode())) {
         if (min_angle_diff(deg, s_target_deg) <= ROTOR_POS_TOL_DEG) {
             if (s_pos_grace_end_ms == 0) {
                 s_pos_grace_end_ms = millis() + ROTOR_POLL_POS_GRACE_MS;
@@ -2348,6 +2404,8 @@ void rotor_rs485_init(void)
     s_weather_phase = 0;
     s_next_motortemp_ms = millis() + 2000u;
     s_setposcc_queued = false;
+    s_setposdg_retry_count = 0;
+    s_geterr_retry_count = 0;
 }
 
 /** Erstes Paket nach Einschalten: TEST (Ping), 3 Versuche ohne ACK → Fehler 10 */
@@ -2489,13 +2547,17 @@ void rotor_rs485_loop(void)
 
     if (err != 10 && s_boot_test_done) {
         const uint32_t now = millis();
+        uint32_t conn_timeout_ms = ROTOR_CONN_LOST_TIMEOUT_MS;
+        if (s_pending == Pending::SetPosDg) {
+            conn_timeout_ms = ROTOR_CONN_LOST_TIMEOUT_SETPOSDG_MS;
+        }
         bool conn_timeout = false;
         if (s_have_slave_rx_ever) {
-            if ((uint32_t)(now - s_last_slave_rx_ms) >= ROTOR_CONN_LOST_TIMEOUT_MS) {
+            if ((uint32_t)(now - s_last_slave_rx_ms) >= conn_timeout_ms) {
                 conn_timeout = true;
             }
         } else if (s_conn_watch_start_ms != 0 &&
-                   (uint32_t)(now - s_conn_watch_start_ms) >= ROTOR_CONN_LOST_TIMEOUT_MS) {
+                   (uint32_t)(now - s_conn_watch_start_ms) >= conn_timeout_ms) {
             conn_timeout = true;
         }
         if (conn_timeout) {
@@ -2503,7 +2565,7 @@ void rotor_rs485_loop(void)
             rotor_error_app_set_error_code(10);
             stop_fault_motion_polling();
             s_foreign_master_src_id = 0;
-            s_next_conn_recovery_getref_ms = millis() - ROTOR_POLL_GAP_MS;
+            s_next_conn_recovery_getref_ms = millis() - ROTOR_CONN_RECOVERY_GETERR_MS;
             return;
         }
     }
@@ -2532,7 +2594,7 @@ void rotor_rs485_loop(void)
         if (!rotor_rs485_is_foreign_pc_listen_mode()) {
             if ((int32_t)(millis() - s_next_conn_recovery_getref_ms) >= 0) {
                 send_request("GETERR", "0", Pending::GetErr);
-                s_next_conn_recovery_getref_ms = millis() + ROTOR_POLL_GAP_MS;
+                s_next_conn_recovery_getref_ms = millis() + ROTOR_CONN_RECOVERY_GETERR_MS;
             }
         }
         return;
@@ -2571,6 +2633,10 @@ void rotor_rs485_loop(void)
     }
 
     if (s_poll_pos) {
+        if (rotor_rs485_is_foreign_pc_listen_mode()) {
+            /* Fremd-PC pollt bereits GETPOSDG: keine eigene Zusatzlast senden. */
+            return;
+        }
         if ((int32_t)(millis() - s_next_pos_poll_ms) >= 0) {
             send_request("GETPOSDG", "0", Pending::GetPosDg);
         }
@@ -2591,6 +2657,7 @@ void rotor_rs485_loop(void)
     }
 
     if (s_boot_done && (int32_t)(millis() - s_next_geterr_ms) >= 0) {
+        s_geterr_retry_count = 0;
         send_request("GETERR", "0", Pending::GetErr);
         s_next_geterr_ms = millis() + ROTOR_POLL_GETERR_MS;
         return;

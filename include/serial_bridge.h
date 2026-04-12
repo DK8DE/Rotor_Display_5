@@ -31,4 +31,10 @@ void uart_unlock();
  */
 void hw_send(const uint8_t *data, size_t len);
 
+/**
+ * Priorisierter RS485-Versand (für SETPOSCC): kürzere Idle-Wartezeit als hw_send(),
+ * damit Vorschau-Sollwerte bei laufendem Fremd-GETPOSDG nicht verzögert werden.
+ */
+void hw_send_priority(const uint8_t *data, size_t len);
+
 } // namespace serial_bridge

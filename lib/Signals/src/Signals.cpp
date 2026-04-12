@@ -128,3 +128,28 @@ void Signals::stopTone()
   _serial.flush();
   xSemaphoreGive(s_signals_tx_mutex);
 }
+
+void Signals::restartTone(uint16_t freq, uint8_t vol, uint16_t durationMs)
+{
+  vol = clampU8(vol, 50);
+
+  char tbuf[32];
+  if (durationMs > 0) {
+    snprintf(tbuf, sizeof(tbuf), "T %u %u %u", (unsigned)freq, (unsigned)vol, (unsigned)durationMs);
+  } else {
+    snprintf(tbuf, sizeof(tbuf), "T %u %u", (unsigned)freq, (unsigned)vol);
+  }
+
+  // X + T als eine atomare Sequenz senden, damit Ring-Updates nicht dazwischen landen.
+  if (s_signals_tx_mutex == nullptr) {
+      send_one_line_unlocked(_serial, "X");
+      send_one_line_unlocked(_serial, tbuf);
+      _serial.flush();
+      return;
+  }
+  xSemaphoreTake(s_signals_tx_mutex, portMAX_DELAY);
+  send_one_line_unlocked(_serial, "X");
+  send_one_line_unlocked(_serial, tbuf);
+  _serial.flush();
+  xSemaphoreGive(s_signals_tx_mutex);
+}
