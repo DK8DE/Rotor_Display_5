@@ -9,20 +9,12 @@
  * Schutz: Zeitbasierte Bus-Idle — nach jeder Aktivität (TX oder RX) mindestens
  * kBusIdleUs Stille, bevor erneut gesendet wird. Gilt jetzt auch fuer hw_send(),
  * nicht nur fuer USB->Bus (pump_usb_to_hw).
- *
- * USB-Spiegel (Bus→PC): lange Zeilen (z. B. ACK_GETACCBINS) dürfen bei vollem CDC-TX
- * nicht abgeschnitten werden — Rest landet in einer FIFO bis Serial wieder Platz hat.
- *
- * USB→Bus: nur ein vollständiges Telegramm (#…$) pro pump_usb_to_hw()-Durchlauf.
- * Kein 256-Byte-Burst — sonst gehen mehrere Befehle in einem RS485-TX (Halbduplex),
- * der Slave kann nicht alle beantworten → AZ-Timeouts bei GETACCBINS o. ä.
  */
 
 #include "serial_bridge.h"
 #include "rotor_rs485.h"
 
 #include <Arduino.h>
-#include <cstring>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -42,19 +34,19 @@ static constexpr int kPinRs485Dir = 39;
 /** true: Dir-Pin HIGH = Senden; false: invertierte Ansteuerung */
 static constexpr bool kDirTransmitLevel = true;
 
-/** Montage einer PC-Zeile bis '$' (ein Telegramm pro RS485-Sendevorgang) */
-static constexpr size_t kUsbBridgeLineCap = 512;
+/** Puffer für USB -> HW (weniger Umschalten als Byte für Byte) */
+static constexpr size_t kUsbToHwBuf = 256;
 /** HW -> USB + Parser: Blockgröße (Schleife leert UART vollständig pro poll()) */
 static constexpr size_t kHwToUsbBuf = 512;
 
-/** Wartezeit nach letztem gesendeten Byte, bevor wieder Empfang (Bus-Freigabe / MAX485) */
-static constexpr uint32_t kTurnaroundMicros = 500;
+/** Wartezeit nach letztem gesendeten Byte, bevor wieder Empfang (Bus-Freigabe) */
+static constexpr uint32_t kTurnaroundMicros = 250;
 
 /**
- * Mindest-Stille vor erneutem Senden. Lange Slave-Telegramme (z. B. ACK_GETACCBINS ~130 Zeichen
- * ≈ 11 ms @ 115200) + MAX485-Umschaltung — etwas Luft, damit der nächste Request nicht zu früh kommt.
+ * Mindest-Stille vor erneutem Senden (Controller + USB). 12 ms ≈ 138 Byte-Zeiten
+ * @ 115200 — groessere Marge fuer MAX485/Slave-Umschaltung (sonst lange GETREF-Timeouts).
  */
-static constexpr uint32_t kBusIdleUs = 28000;
+static constexpr uint32_t kBusIdleUs = 12000;
 
 /** Max. Warten auf Bus-Idle (ms); muss deutlich > kBusIdleUs sein, sonst Senden ohne Pause. */
 static constexpr uint32_t kBusIdleWaitCapMs = 200;
@@ -64,21 +56,6 @@ static uint32_t s_baud = 115200;
 
 /** Zeitstempel der letzten Bus-Aktivität (TX oder RX), micros(). */
 static uint32_t s_last_bus_activity_us = 0;
-
-/** Ausstehende Bytes für USB-CDC-Spiegel (HW-RX / hw_send-Echo), wenn write() nicht alles schafft */
-static constexpr size_t kUsbMirrorPendingCap = 16384;
-static uint8_t s_usb_mirror_pending[kUsbMirrorPendingCap];
-static size_t s_usb_mirror_pending_len = 0;
-
-static char s_usb_line_asm[kUsbBridgeLineCap];
-static size_t s_usb_line_len = 0;
-
-/**
- * Nach USB→Bus GETACCBINS: rotor_rs485_loop() darf nicht sofort per hw_send in die
- * lange ACK_GETACCBINS oder die folgende Ruhephase senden (Halbduplex-Kollision).
- */
-static uint32_t s_block_hw_send_until_us = 0;
-static constexpr uint32_t kAfterGetAccBinsUsbTxUs = 55000;
 
 void set_baud(uint32_t baud) { s_baud = baud; }
 
@@ -106,66 +83,23 @@ void uart_unlock()
     }
 }
 
-static void drain_usb_mirror_pending_to_cdc()
-{
-    while (s_usb_mirror_pending_len > 0) {
-        const int space = Serial.availableForWrite();
-        if (space <= 0) {
-            return;
-        }
-        const size_t chunk =
-            (size_t)space < s_usb_mirror_pending_len ? (size_t)space : s_usb_mirror_pending_len;
-        const size_t w = Serial.write(s_usb_mirror_pending, chunk);
-        if (w == 0) {
-            return;
-        }
-        if (w < s_usb_mirror_pending_len) {
-            memmove(s_usb_mirror_pending, s_usb_mirror_pending + w, s_usb_mirror_pending_len - w);
-        }
-        s_usb_mirror_pending_len -= w;
-    }
-}
-
-static void usb_mirror_pending_push(const uint8_t *data, size_t len)
+/** USB-Monitor: nur bis Puffer frei — nie blockieren (ohne PC-Leser: sonst Parser/Anzeige verzögert). */
+static void mirror_usb_nonblocking(const uint8_t *data, size_t len)
 {
     if (!data || len == 0) {
         return;
     }
-    if (s_usb_mirror_pending_len + len > kUsbMirrorPendingCap) {
-        const size_t need = s_usb_mirror_pending_len + len - kUsbMirrorPendingCap;
-        if (need >= s_usb_mirror_pending_len) {
-            s_usb_mirror_pending_len = 0;
-        } else {
-            memmove(s_usb_mirror_pending, s_usb_mirror_pending + need, s_usb_mirror_pending_len - need);
-            s_usb_mirror_pending_len -= need;
-        }
-    }
-    memcpy(s_usb_mirror_pending + s_usb_mirror_pending_len, data, len);
-    s_usb_mirror_pending_len += len;
-}
-
-/**
- * Bus-/Echo-Daten an USB durchreichen: erst FIFO leeren, dann schreiben; Überhang in FIFO.
- * Parser (rotor_rs485) bekommt die Bytes unabhängig davon vollständig (siehe pump_hw).
- */
-static void mirror_usb_to_cdc(const uint8_t *data, size_t len)
-{
-    if (!data || len == 0) {
-        return;
-    }
-    drain_usb_mirror_pending_to_cdc();
     size_t off = 0;
     while (off < len) {
         const int space = Serial.availableForWrite();
         if (space <= 0) {
-            usb_mirror_pending_push(data + off, len - off);
-            return;
+            break;
         }
-        const size_t take = (size_t)space < (len - off) ? (size_t)space : (len - off);
-        const size_t w = Serial.write(data + off, take);
+        const size_t chunk =
+            (size_t)space < (len - off) ? (size_t)space : (len - off);
+        const size_t w = Serial.write(data + off, chunk);
         if (w == 0) {
-            usb_mirror_pending_push(data + off, len - off);
-            return;
+            break;
         }
         off += w;
     }
@@ -191,16 +125,7 @@ static void drain_hw_rx_quick()
         }
         s_last_bus_activity_us = micros();
         rotor_rs485_rx_bytes(buf, n);
-        mirror_usb_to_cdc(buf, n);
-    }
-}
-
-static void hw_send_wait_after_pc_getaccbins()
-{
-    while ((int32_t)(micros() - s_block_hw_send_until_us) < 0) {
-        drain_hw_rx_quick();
-        delayMicroseconds(400);
-        yield();
+        mirror_usb_nonblocking(buf, n);
     }
 }
 
@@ -243,7 +168,6 @@ void hw_send(const uint8_t *data, size_t len)
     if (!data || len == 0) {
         return;
     }
-    hw_send_wait_after_pc_getaccbins();
     wait_bus_idle_for_controller_tx();
 
     uart_lock();
@@ -256,7 +180,7 @@ void hw_send(const uint8_t *data, size_t len)
     dir_receive();
     uart_unlock();
     s_last_bus_activity_us = micros();
-    mirror_usb_to_cdc(data, len);
+    mirror_usb_nonblocking(data, len);
 }
 
 void begin()
@@ -287,8 +211,9 @@ static bool bus_clear_for_tx()
 }
 
 /**
- * USB → RS485: genau ein Telegramm # … $ pro Aufruf.
- * Mehrere Zeilen im PC-Puffer werden nacheinander (je poll-Runde) gesendet, nicht in einem Burst.
+ * USB → RS485: PC-Daten auf den Bus schicken.
+ * Nur wenn der Bus nachweislich idle ist (kein RX, kBusIdleUs Stille).
+ * Sonst bleiben die PC-Daten im USB-CDC-Puffer → nächstes poll().
  */
 static void pump_usb_to_hw()
 {
@@ -296,35 +221,22 @@ static void pump_usb_to_hw()
         return;
     }
 
-    while (Serial.available() && s_usb_line_len + 1 < kUsbBridgeLineCap) {
-        int c = Serial.peek();
+    uint8_t buf[kUsbToHwBuf];
+    size_t n = 0;
+    while (Serial.available() && n < sizeof(buf)) {
+        int c = Serial.read();
         if (c < 0) {
             break;
         }
-        if (s_usb_line_len == 0 && (c == '\r' || c == '\n')) {
-            (void)Serial.read();
-            continue;
-        }
-        (void)Serial.read();
-        s_usb_line_asm[s_usb_line_len++] = static_cast<char>(c);
-        if (c == '$') {
-            break;
-        }
+        buf[n++] = static_cast<uint8_t>(c);
     }
-
-    if (s_usb_line_len == 0) {
-        return;
-    }
-    if (s_usb_line_asm[s_usb_line_len - 1] != '$') {
-        if (s_usb_line_len >= kUsbBridgeLineCap - 1) {
-            s_usb_line_len = 0;
-        }
+    if (n == 0) {
         return;
     }
 
     uart_lock();
     dir_transmit();
-    s_hw->write(reinterpret_cast<const uint8_t *>(s_usb_line_asm), s_usb_line_len);
+    s_hw->write(buf, n);
     s_hw->flush();
     if (kTurnaroundMicros) {
         delayMicroseconds(kTurnaroundMicros);
@@ -332,12 +244,7 @@ static void pump_usb_to_hw()
     dir_receive();
     uart_unlock();
     s_last_bus_activity_us = micros();
-    const bool pc_getaccbins = (strstr(s_usb_line_asm, "GETACCBINS") != nullptr);
-    rotor_rs485_rx_bytes(reinterpret_cast<const uint8_t *>(s_usb_line_asm), s_usb_line_len);
-    s_usb_line_len = 0;
-    if (pc_getaccbins) {
-        s_block_hw_send_until_us = micros() + kAfterGetAccBinsUsbTxUs;
-    }
+    rotor_rs485_rx_bytes(buf, n);
 }
 
 /** UART → USB + Parser: komplett leeren (mehrere Blöcke). */
@@ -361,17 +268,15 @@ static void pump_hw_to_usb_and_parser()
         s_last_bus_activity_us = micros();
         /* Zuerst Parser: SETPOSDG/taget_dg sofort — USB-Spiegel darf nicht vor RX-Parser blockieren */
         rotor_rs485_rx_bytes(buf, n);
-        mirror_usb_to_cdc(buf, n);
+        mirror_usb_nonblocking(buf, n);
     }
 }
 
 void poll()
 {
-    drain_usb_mirror_pending_to_cdc();
     /* ERST Bus leeren (Rotor-Antworten), DANN (nur wenn Bus idle) PC-Daten senden. */
     pump_hw_to_usb_and_parser();
     pump_usb_to_hw();
-    drain_usb_mirror_pending_to_cdc();
     yield();
 }
 
