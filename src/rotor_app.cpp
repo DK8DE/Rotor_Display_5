@@ -711,7 +711,21 @@ static void actual_dg_set_display_text(const char *buf, bool sync_full_refr_now 
 /** RS485-Pfad darf nicht direkt lvgl_port_lock + Label setzen (WDT/Deadlock mit LVGL-Task). */
 static void on_ref_status(bool referenced)
 {
+    if (!referenced) {
+        s_encoder_adjusting = false;
+        s_encoder_goto_retry_pending = false;
+        s_encoder_retry_deadline_ms = 0;
+        s_encoder_idle_deadline_ms = 0;
+        s_encoder_arc_int_cached = -32768;
+    }
     lvgl_port_lock(-1);
+    if (objects.grad_acc) {
+        if (referenced) {
+            lv_obj_add_flag(objects.grad_acc, LV_OBJ_FLAG_CLICKABLE);
+        } else {
+            lv_obj_clear_flag(objects.grad_acc, LV_OBJ_FLAG_CLICKABLE);
+        }
+    }
     if (objects.homing_led) {
         /* Fehler / Start-GETERR ausstehend: nicht grün nur wegen GETREF=1 */
         if (rotor_error_app_get_error_code() != 0 || !rotor_rs485_is_startup_error_checked()) {
@@ -857,6 +871,9 @@ static void on_arc(lv_event_t *e)
     lv_obj_t *arc = lv_event_get_target(e);
 
     if (c == LV_EVENT_PRESSED) {
+        if (!rotor_rs485_is_referenced()) {
+            return;
+        }
         s_arc_dragging = true;
         s_arc_moved_this_press = false;
         s_arc_value_at_press = lv_arc_get_value(arc);
@@ -864,6 +881,9 @@ static void on_arc(lv_event_t *e)
          * und kein ausstehendes SETPOSDG verwerfen — erst bei echtem Drag (VALUE_CHANGED). */
     }
     if (c == LV_EVENT_VALUE_CHANGED) {
+        if (!rotor_rs485_is_referenced()) {
+            return;
+        }
         if (rotor_error_app_is_fault_locked()) {
             return;
         }
@@ -894,6 +914,9 @@ static void on_arc(lv_event_t *e)
         /* Pieps immer beim Loslassen (Arc-Callback nur bei Touch auf dem Arc) — nicht hinter
          * s_arc_updating verstecken: sonst kein Ton und kein GOTO, wenn zufällig Flag noch stand. */
         touch_feedback_arc_release();
+        if (!rotor_rs485_is_referenced()) {
+            return;
+        }
         if (rotor_error_app_is_fault_locked()) {
             return;
         }
@@ -933,6 +956,9 @@ extern "C" void rotor_app_init(void)
         /* Arc-Knauf (Zeiger-Punkt): rot — nur Laufzeit, keine Änderung in ui/screens.c */
         lv_obj_set_style_bg_color(objects.grad_acc, lv_color_hex(0xff0000), LV_PART_KNOB);
         lv_obj_set_style_bg_opa(objects.grad_acc, LV_OPA_COVER, LV_PART_KNOB);
+        if (!rotor_rs485_is_referenced()) {
+            lv_obj_clear_flag(objects.grad_acc, LV_OBJ_FLAG_CLICKABLE);
+        }
     }
     s_pwm_ui_is_fast = pwm_config_get_pwm_ui_fast() != 0;
     pwm_style_slow_fast(s_pwm_ui_is_fast);
@@ -982,6 +1008,9 @@ extern "C" void rotor_app_init(void)
 /** @return true wenn SETPOSDG gestartet */
 static bool encoder_apply_goto(float target_deg)
 {
+    if (!rotor_rs485_is_referenced()) {
+        return false;
+    }
     lvgl_port_lock(-1);
     if (ENCODER_MOVES_ARC && objects.grad_acc) {
         grad_acc_sync_mechanical(s_last_bus_ist_deg);
@@ -1019,6 +1048,10 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
             id_fields_set_text(ta, newv);
         }
         lvgl_port_unlock();
+        return;
+    }
+
+    if (!rotor_rs485_is_referenced()) {
         return;
     }
 
@@ -1251,6 +1284,12 @@ extern "C" void rotor_pwm_ui_loop(void)
 extern "C" void rotor_app_loop(void)
 {
     if (!s_encoder_adjusting) {
+        return;
+    }
+    if (!rotor_rs485_is_referenced()) {
+        s_encoder_goto_retry_pending = false;
+        s_encoder_idle_deadline_ms = 0;
+        s_encoder_adjusting = false;
         return;
     }
 

@@ -201,14 +201,14 @@ static void SingleClickCb(void *button_handle, void *usr_data)
         lvgl_port_unlock();
         return;
     }
-    if (rotor_rs485_is_position_polling()) {
-        /* Soll = Ist: Encoder-Session löschen (sonst kein taget + altes SETPOS aus rotor_app_loop) */
+    if (rotor_rs485_is_moving() || rotor_rs485_is_remote_setpos_motion()) {
+        /* Homing/GET-Polling oder Fahrt nur vom PC (kein s_poll_pos → is_moving() wäre false) */
+        rotor_rs485_send_stop();
+    } else if (rotor_rs485_is_position_polling() && rotor_rs485_is_referenced()) {
+        /* Soll = Ist nur mit Referenz — ohne Ref: Homing (unten) statt sinnlosem SETPOSDG */
         const float snap = rotor_rs485_get_last_position_deg();
         rotor_app_snap_target_to_deg(snap);
         rotor_rs485_hw_snap_retarget_request(snap);
-    } else if (rotor_rs485_is_moving() || rotor_rs485_is_remote_setpos_motion()) {
-        /* Homing/GET-Polling oder Fahrt nur vom PC (kein s_poll_pos → is_moving() wäre false) */
-        rotor_rs485_send_stop();
     } else if (!rotor_rs485_is_referenced()) {
         rotor_rs485_send_setref_homing();
     }

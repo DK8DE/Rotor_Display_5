@@ -17,7 +17,8 @@
  *
  * Verbindung: Fehler 10 (Verbindungstimeout), wenn länger kein Telegramm vom Slave (SRC=Rotor-ID)
  * oder vor erster Antwort nur Timeouts — PC- oder Controller-Abfragen zählen (ROTOR_CONN_LOST_TIMEOUT_MS).
- * Fehler 10: GETERR-Recovery bis ACK_ERR (nicht GETREF zuerst — ref=1 trotz Slave-Fehler möglich).
+ * Fehler 10: bei ausbleibender Antwort periodisch GETREF (ROTOR_CONN_RECOVERY_GETREF_MS), bis der Slave
+ * wieder antwortet; danach Referenz/GETPOSDG wie bei Boot. GETERR/ACK_ERR bleibt für echte Slave-Fehler.
  * Boot: zuerst 3× TEST:0 (Ping, je ROTOR_RS485_ACK_TIMEOUT_MS); ohne ACK_TEST/NAK_TEST → sofort Fehler 10.
  *
  * Zweiter Master auf demselben RS485-Segment (eigenes PC-Interface, nicht „durch den Controller“ gebündelt):
@@ -87,6 +88,11 @@ extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3);
 
 #ifndef ROTOR_PERIODIC_GETREF_MS
 #define ROTOR_PERIODIC_GETREF_MS 5000u
+#endif
+
+/** Bei Fehler 10 (Verbindungstimeout): GETREF-Intervall bis der Rotor wieder antwortet */
+#ifndef ROTOR_CONN_RECOVERY_GETREF_MS
+#define ROTOR_CONN_RECOVERY_GETREF_MS 2000u
 #endif
 
 /** GETERR bei Timeout: maximal so viele Wiederholungen vor Cooldown (nur fuer manuelle GETERR-Abfragen). */
@@ -203,6 +209,8 @@ static bool s_slave_referenced = false;
 static float s_last_pos_ui_deg = 0.0f;
 /** GETREF alle ROTOR_PERIODIC_GETREF_MS nach Boot, solange kein Homing-Polling */
 static uint32_t s_next_periodic_getref_ms = 0;
+/** Nächstes ACK_GETREF ist die Antwort auf ein GETREF im Zustand Verbindungstimeout (Fehler 10) */
+static bool s_err10_recovery_getref_pending = false;
 
 /** SETPOSCC: zuletzt gewünschter Busgrad — Versand erst in rotor_rs485_loop bei freiem Pending (kein TX vor ACK/GETPOS). */
 static bool s_setposcc_queued = false;
@@ -384,6 +392,8 @@ static bool pending_timed_out()
     uint32_t timeout_ms = ROTOR_RS485_ACK_TIMEOUT_MS;
     if (s_pending == Pending::SetPosDg) {
         timeout_ms = ROTOR_RS485_SETPOSDG_ACK_TIMEOUT_MS;
+    } else if (s_pending == Pending::GetRef && rotor_error_app_get_error_code() == 10) {
+        timeout_ms = ROTOR_CONN_RECOVERY_GETREF_MS;
     }
     return (millis() - s_pending_since_ms) >= timeout_ms;
 }
@@ -572,7 +582,14 @@ void rotor_rs485_send_getref(void)
 
 void rotor_rs485_send_setref_homing(void)
 {
-    if (s_pending != Pending::None) {
+    /* Laufende Positions-Telegramme abbrechen, sonst blockiert pending == SetPosDg den Homing-Start */
+    if (s_pending == Pending::SetPosDg || s_pending == Pending::GetPosDg) {
+        clear_pending();
+        s_poll_pos = false;
+        s_pos_grace_end_ms = 0;
+        s_hw_snap_retarget_active = false;
+        s_setposdg_retry_count = 0;
+    } else if (s_pending != Pending::None) {
         return;
     }
     send_request("SETREF", "1", Pending::SetRef);
@@ -651,6 +668,10 @@ bool rotor_rs485_send_set_pwm_limit(uint8_t pct)
 
 bool rotor_rs485_goto_degrees(float deg)
 {
+    /* Ohne Slave-Referenz lehnt der Rotor SETPOSDG mit NOREF ab — nicht senden (verhindert NAK-/Retry-Sturm). */
+    if (!s_slave_referenced) {
+        return false;
+    }
     /* SETPOSDG hat Vorrang: ausstehende Abfragen sofort abbrechen, damit Encoder-Ziel ohne
      * GETREF/GETERR/Weather-Wartekette direkt gesendet wird. */
     if (s_pending == Pending::SetPosDg) {
@@ -721,6 +742,10 @@ void rotor_rs485_send_setposcc_degrees(float deg)
 static void try_hw_snap_retarget(void)
 {
     if (!s_hw_snap_retarget_active) {
+        return;
+    }
+    if (!s_slave_referenced) {
+        s_hw_snap_retarget_active = false;
         return;
     }
     (void)rotor_rs485_goto_degrees(s_hw_snap_retarget_deg);
@@ -1517,7 +1542,8 @@ static void on_ack_timeout()
     if (rotor_rs485_is_foreign_pc_listen_mode()) {
         switch (s_pending) {
         case Pending::GetRef:
-            if (s_poll_ref) {
+            /* Verbindungs-Wiederherstellung: GETREF muss trotz Fremd-Master wiederholt werden dürfen */
+            if (s_poll_ref || rotor_error_app_get_error_code() == 10) {
                 break;
             }
             clear_pending();
@@ -1885,6 +1911,16 @@ static bool parse_ack_getref(const char *line)
         clear_pending();
     }
 
+    if (s_err10_recovery_getref_pending) {
+        s_err10_recovery_getref_pending = false;
+        if (ref_ok) {
+            s_poll_ref = false;
+            s_align_target_after_pos_read = true;
+            send_request("GETPOSDG", "0", Pending::GetPosDg);
+        }
+        return true;
+    }
+
     /* Boot vor Homing-Logik: GETREF → ggf. GETPOSDG */
     if (!s_boot_done && s_boot_phase == 1) {
         if (ref_ok) {
@@ -2078,9 +2114,13 @@ static bool parse_nak_and_clear(const char *line)
         if (!line_src_dst(line, &nsrc, &ndst) || ndst != (unsigned)s_master_id) {
             return false;
         }
+        if (strstr(line, ":NAK_SETPOSDG:NOREF:")) {
+            notify_ref(false);
+        }
         clear_pending();
         s_poll_pos = false;
         s_pos_grace_end_ms = 0;
+        s_hw_snap_retarget_active = false;
         return true;
     }
     if (strstr(line, ":NAK_SETREF:") && s_pending == Pending::SetRef) {
@@ -2382,6 +2422,7 @@ void rotor_rs485_rx_bytes(const uint8_t *data, size_t len)
 
 void rotor_rs485_init(void)
 {
+    s_err10_recovery_getref_pending = false;
     s_boot_test_done = false;
     s_boot_test_timeout_count = 0;
     s_last_slave_rx_ms = 0;
@@ -2557,6 +2598,7 @@ void rotor_rs485_loop(void)
         }
         if (conn_timeout) {
             clear_pending();
+            s_err10_recovery_getref_pending = false;
             rotor_error_app_set_error_code(10);
             stop_fault_motion_polling();
             s_foreign_master_src_id = 0;
@@ -2583,8 +2625,13 @@ void rotor_rs485_loop(void)
         return;
     }
 
-    /* Fehler 10: keine zyklischen GETERR-Abfragen mehr; Aufhebung bei eingehender Slave-Antwort im Parser. */
+    /* Fehler 10: periodisch GETREF (Intervall ROTOR_CONN_RECOVERY_GETREF_MS via pending_timed_out), bis der
+     * Slave wieder antwortet; Parser hebt Fehler 10 bei erster gültiger Slave-Zeile auf. */
     if (rotor_error_app_get_error_code() == 10) {
+        if (s_pending == Pending::None) {
+            s_err10_recovery_getref_pending = true;
+            send_request("GETREF", "0", Pending::GetRef);
+        }
         return;
     }
 
