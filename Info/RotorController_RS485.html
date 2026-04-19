@@ -10,7 +10,7 @@
             font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             line-height: 1.5;
             padding: 20px;
-            max-width: 900px;
+            max-width: 1200px;
             margin: 0 auto;
             background: #f7f7f7;
         }
@@ -122,7 +122,7 @@
 <body>
 <div class="section" id="intro">
   <h1>Rotor‑Controller – RS485‑Anleitung &amp; Firmware‑Dokumentation (DE)</h1>
-  <p class="muted">Stand: 2026-03-28 • Fokus: RS485‑Befehle, Einstellungen (INO), Kalibrierung/Statistik, Fehler &amp; Warnungen. Die <b>Befehlstabelle</b> ist mit dem RotorTcpBridge‑Katalog abgeglichen (<code>command_catalog.py</code> / Befehlsfenster).</p>
+  <p class="muted">Stand: 2026-04-16 • Fokus: RS485‑Befehle, Einstellungen (INO), Kalibrierung/Statistik, Fehler &amp; Warnungen. Die <b>Befehlstabelle</b> ist mit dem RotorTcpBridge‑Katalog abgeglichen (<code>command_catalog.py</code> / Befehlsfenster). Diese Datei ist mit <code>RotorTcpBridge/Protokoll/RotorController_RS485.html</code> abgestimmt.</p>
 </div>
 <main>
 <section class="toc" id="toc">
@@ -642,6 +642,16 @@
 <td><code>#0:20:SETHOMEBACKOFF:...:CS$</code></td>
 <td><code>#20:0:ACK_SETHOMEBACKOFF:...:&lt;CS&gt;$</code><br><span class="muted">oder: <code>#20:0:NAK_SETHOMEBACKOFF:REASON:CS$</code></span></td>
 <td><b><a href="#cmd-SETHOMEBACKOFF">SETHOMEBACKOFF</a></b><br>Homing Rückzug (Grad) setzen.</td>
+</tr>
+<tr>
+<td><code>#0:20:GETHOMEBLSCALE:...:CS$</code></td>
+<td><code>#20:0:ACK_GETHOMEBLSCALE:...:&lt;CS&gt;$</code><br><span class="muted">oder: <code>#20:0:NAK_GETHOMEBLSCALE:REASON:CS$</code></span></td>
+<td><b><a href="#cmd-GETHOMEBLSCALE">GETHOMEBLSCALE</a></b><br>Homing: Backlash-Skalierung (0–1) lesen.</td>
+</tr>
+<tr>
+<td><code>#0:20:SETHOMEBLSCALE:...:CS$</code></td>
+<td><code>#20:0:ACK_SETHOMEBLSCALE:...:&lt;CS&gt;$</code><br><span class="muted">oder: <code>#20:0:NAK_SETHOMEBLSCALE:REASON:CS$</code></span></td>
+<td><b><a href="#cmd-SETHOMEBLSCALE">SETHOMEBLSCALE</a></b><br>Homing: Faktor für die Backlash-Berechnung (0–1) setzen.</td>
 </tr>
 <tr>
 <td><code>#0:20:GETHOMRETURN:...:CS$</code></td>
@@ -1292,6 +1302,14 @@
 <p><b>Was es macht:</b> Homing Rückzug (Grad) setzen.</p>
 <p><b>Details:</b> Typisch 10..60°.</p>
 <hr>
+<h4 id="cmd-GETHOMEBLSCALE"><code>GETHOMEBLSCALE</code></h4>
+<p><b>Was es macht:</b> Homing: Skalierung der Backlash-Berechnung (0–1) lesen.</p>
+<p><b>Details:</b> Typischer Default <code>0,50</code>. Wert wird im Rotor gespeichert (NV-Key <code>hbl</code>, falls in der Firmware so benannt).</p>
+<hr>
+<h4 id="cmd-SETHOMEBLSCALE"><code>SETHOMEBLSCALE</code></h4>
+<p><b>Was es macht:</b> Homing: Faktor für die Backlash-Berechnung (0–1) setzen.</p>
+<p><b>Details:</b> Standard <code>0,50</code>. Wenn beim Umkehren zu viel Weg „weg“ wirkt: Wert vergrößern (max. 1,0).</p>
+<hr>
 <h4 id="cmd-GETHOMRETURN"><code>GETHOMRETURN</code></h4>
 <p><b>Was es macht:</b> Rückfahrt auf 0 nach Homing an/aus lesen.</p>
 <p><b>Details:</b> 1=ja, 0=nein.</p>
@@ -1609,6 +1627,13 @@
 <td>Homing: Rückzug vom Endschalter (Grad)</td>
 </tr>
 <tr>
+<td><code>g_homeBacklashScale</code></td>
+<td><code>hbl</code></td>
+<td>ja</td>
+<td>SETHOMEBLSCALE/GETHOMEBLSCALE</td>
+<td>Homing: Backlash-Berechnung (0–1)</td>
+</tr>
+<tr>
 <td><code>g_homeReturnToZero</code></td>
 <td><code>hrz</code></td>
 <td>ja</td>
@@ -1900,6 +1925,11 @@
 <p><b>Kurz:</b> Homing: Rückzug vom Endschalter (Grad)</p>
 <p class="muted"><b>Default:</b> <code>static float g_homeBackoff = 30.0f;</code></p>
 <p><b>Speicherung:</b> Ja (Key <code>hbo</code>). Ändern über RS485: <b>SETHOMEBACKOFF/GETHOMEBACKOFF</b>.</p>
+<hr>
+<h3 id="var-g_homeBacklashScale"><code>g_homeBacklashScale</code></h3>
+<p><b>Kurz:</b> Homing: Skalierung der Backlash-Berechnung (0–1)</p>
+<p class="muted"><b>Default:</b> <code>static float g_homeBacklashScale = 0.5f;</code> (Bezeichnung in der Firmware kann abweichen.)</p>
+<p><b>Speicherung:</b> Ja (Key <code>hbl</code>, sofern in der Firmware vorgesehen). Ändern über RS485: <b>SETHOMEBLSCALE/GETHOMEBLSCALE</b>.</p>
 <hr>
 <h3 id="var-g_homeReturnToZero"><code>g_homeReturnToZero</code></h3>
 <p><b>Kurz:</b> Homing: danach auf 0 fahren (1/0)</p>
