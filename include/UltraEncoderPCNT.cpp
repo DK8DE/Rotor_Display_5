@@ -111,7 +111,7 @@ bool UltraEncoderPCNT::begin(uint8_t accelPercent,
 
     // Wenn schon aktiv: sauber stoppen (inkl. PCNT/Task)
     // Z bleibt dabei deaktiviert, weil stop() detachZ() macht.
-    // Falls du Z dauerhaft willst: nach begin() wieder attachZ() aufrufen.
+    // Dauerhaft Z: nach begin() erneut attachZ().
     stop();
 
     // PCNT initialisieren
@@ -523,8 +523,8 @@ void UltraEncoderPCNT::handleZInTask() {
 
     if (pendingCount == 0) return;
 
-    // Wenn mehrere Events in einem Task-Zyklus kamen, koennen wir deren Zwischenzeiten nicht rekonstruieren.
-    // Wir behandeln das als EIN Event (mit dem letzten Timestamp) und lassen Korrektur ggf. aus.
+    // Mehrere Z-Events pro Task-Zyklus: Zwischenzeiten nicht rekonstruierbar.
+    // Als ein Ereignis (letzter Timestamp) werten, Korrektur ggf. auslassen.
     bool burst = (pendingCount > 1);
 
     // RAW-Position zum Zeitpunkt der Auswertung (Task) - konsistent mit A/B-Verarbeitung
@@ -570,9 +570,9 @@ void UltraEncoderPCNT::handleZInTask() {
     // --------------------------------------------------------
     // Korrektur nur sinnvoll, wenn:
     // - aktiviert
-    // - ein erwarteter Abstand gesetzt ist
-    // - wir einen gueltigen Abstand haben (nicht erster Z)
-    // - kein Burst (mehrere Z in einem Task-Durchlauf) -> unsicher
+    // - erwarteter Abstand gesetzt
+    // - gueltiger Abstand (nicht erster Z)
+    // - kein Burst (mehrere Z pro Task-Durchlauf) — unsicher
     if (_zCorrEnabled && _zExpectedStepsAbs > 0 && _lastZDistanceUs != 0 && !burst) {
         int64_t dz = _lastZDistanceStepsRaw;
 
@@ -587,7 +587,7 @@ void UltraEncoderPCNT::handleZInTask() {
             if (_zMaxAbsErrorSteps == 0 || llabs(errSteps) <= _zMaxAbsErrorSteps) {
                 // Offset so aendern, dass korrigierte Position "auf Raster" liegt:
                 // corr = raw + offset
-                // Wenn dz zu gross war (wir haben zu viele Steps gezaehlt), dann offset kleiner machen usw.
+                // dz zu gross (zu viele gezaehlte Steps): Offset entsprechend anpassen.
                 float corrF = (float)errSteps * _zCorrGain;
 
                 // Auf ganze Steps runden

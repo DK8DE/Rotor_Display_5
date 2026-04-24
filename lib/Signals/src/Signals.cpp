@@ -28,8 +28,7 @@ bool Signals::begin(int8_t txPin, int8_t rxPin, uint32_t baud, bool invert)
       s_signals_tx_mutex = xSemaphoreCreateMutex();
   }
 
-  // Wir koennen ohne RX nicht wirklich pruefen, ob es "wirklich" klappt.
-  // Daher immer true.
+  // Ohne RX keine Empfangspruefung; Rueckgabe immer true.
   return true;
 }
 

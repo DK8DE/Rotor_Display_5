@@ -18,9 +18,9 @@ typedef void (*UltraEncoderStepCallback)(void *user, int32_t stepDelta);
   - Optional kann anhand des erwarteten Schritt-Abstands zwischen zwei Z-Events eine
     Korrektur der Position vorgenommen werden, um Schrittverluste / Fehlzaehlungen zu kompensieren.
 
-  WICHTIG:
-  - PCNT dekodiert nur A/B. Z wird separat ueber GPIO-Interrupt erfasst.
-  - Fuer Debug gibt es RAW-Position (nur A/B) und CORR-Position (RAW + Offset durch Z-Korrektur).
+  Technik:
+  - PCNT dekodiert nur A/B; Z separat per GPIO-Interrupt.
+  - Debug: RAW-Position (A/B) und CORR-Position (RAW + Z-Korrektur-Offset).
 */
 
 // ------------------------------------------------------------

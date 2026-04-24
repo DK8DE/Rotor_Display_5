@@ -9,7 +9,7 @@
 #include <ESP_Knob.h>
 #include <Signals.h>
 #include <freertos/portmacro.h>
-// WICHTIG: Lokalen UI-Wrapper verwenden (EEZ-Studio UI liegt unter "src/ui/")
+/* UI: lokaler Wrapper; EEZ-Studio-Ausgabe unter src/ui/ */
 #include "ui.h"
 #include "serial_bridge.h"
 #include "pwm_config.h"
@@ -70,11 +70,7 @@ static void signals_play_boot_welcome()
 }
 
 /**
- * EEZ-Studio UI benötigt (je nach Projekt) einen periodischen Tick.
- *
- * Da in diesem Beispiel LVGL in einem eigenen Task läuft (lv_timer_handler()),
- * registrieren wir einen LVGL-Timer, der ui_tick() regelmäßig im LVGL-Kontext
- * aufruft.
+ * EEZ-Studio-UI: periodischer `ui_tick()` im LVGL-Kontext (LVGL läuft im eigenen Task, `lv_timer_handler()`).
  */
 static void ui_tick_timer_cb(lv_timer_t *timer)
 {
@@ -87,9 +83,9 @@ static void ui_tick_timer_cb(lv_timer_t *timer)
 using namespace esp_panel::drivers;
 using namespace esp_panel::board;
 
-/*if you use BOARD_VIEWE_UEDX46460015_MD50ET or UEDX48480021_MD80E/T,please open it*/
-/* Board VIEWE: A/B getauscht + invertDirection() — Debounce in lib/ESP32_Knob/.../iot_knob.c */
-/* A/B wie am Encoder (ohne invertDirection — symmetrischer iot_knob-Pfad). Bei falscher Drehrichtung A/B tauschen oder invertDirection() setzen. */
+/* Board VIEWE UEDX46460015_MD50ET / UEDX48480021_MD80E(T): ggf. spezifisches Define aus Datenblatt aktivieren. */
+/* VIEWE: A/B vertauscht + invertDirection() — Debounce: lib/ESP32_Knob/.../iot_knob.c */
+/* A/B wie verdrahtet (ohne invertDirection, symmetrischer iot_knob-Pfad). Falsche Drehrichtung: A/B tauschen oder invertDirection(). */
 #define GPIO_NUM_KNOB_PIN_A     5
 #define GPIO_NUM_KNOB_PIN_B     6
 #define GPIO_BUTTON_PIN         GPIO_NUM_0
@@ -303,7 +299,7 @@ void setup()
      */
 
     // EEZ-Studio UI tick regelmäßig ausführen (läuft innerhalb des LVGL-Tasks)
-    // 10ms ist ein guter Startwert; können wir später je nach Bedarf anpassen.
+    // 10 ms Startintervall; bei Bedarf anpassbar.
     lv_timer_create(ui_tick_timer_cb, 10, NULL);
     /* Release the mutex */
     lvgl_port_unlock();

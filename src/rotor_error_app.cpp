@@ -26,7 +26,7 @@ static int s_err_code = 0;
 static uint32_t s_err_set_ms = 0;
 static uint32_t s_led_blink_last_ms = 0;
 static bool s_led_blink_bright = true;
-/** Wechsel Fehlertext / „Bitte Neustart“ pro Sekunde */
+/** Abwechselnd Fehlertext und Neustart-Hinweis (UI-String) pro Sekunde */
 static uint32_t s_meldetext_last_alternate_sec = UINT32_MAX;
 
 static const char *message_for_code(int code)
@@ -58,7 +58,7 @@ static void apply_fault_meldetext_alternate(uint32_t now_ms)
     if (!objects.meldetext || s_err_code == 0) {
         return;
     }
-    /* Timeout: kein Wechsel mit „Bitte Neustart“ — Verbindung kann ohne Neustart wiederkehren */
+    /* Fehler 10: kein Wechsel zur Neustart-Zeile — Verbindung kann ohne Neustart wiederkehren */
     if (s_err_code == 10) {
         lv_textarea_set_text(objects.meldetext, "Verbindungstimeout");
         return;

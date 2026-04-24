@@ -3,12 +3,10 @@
  *
  * Lokaler UI-Wrapper für dieses Beispielprojekt.
  *
- * Ziel:
- * - Statt der bisher eingebundenen externen UI-Library ("<ui.h>") wird hier die von EEZ Studio
- *   generierte UI aus dem Unterordner "src/ui/" verwendet.
- * - Zusätzlich stellen wir (vorerst als Platzhalter) die beiden Funktionen bereit, die das
- *   Demo bereits aufruft: LVGL_knob_event() und LVGL_button_event().
- *   -> Die konkrete Logik (z.B. Fokuswechsel, Screenwechsel, Werte ändern) machen wir später.
+ * Aufbau:
+ * - Statt einer externen UI-Library (`<ui.h>`) liegt die EEZ-Studio-generierte UI unter `src/ui/`.
+ * - Platzhalter-Callbacks `LVGL_knob_event()` / `LVGL_button_event()` für die Demo-Hooks.
+ * - Konkrete Logik (Fokus, Screens, Werte) kann später ergänzt werden.
  */
 
 #ifndef APP_UI_WRAPPER_H
@@ -30,12 +28,7 @@ extern "C" {
 #endif
 
 /**
- * Ereignisse für den Rotary-Encoder.
- *
- * Hinweis:
- * - Im bisherigen Demo wurden diese Werte als (void*) übergeben.
- * - Wir lassen die Namen bewusst identisch, damit du später ohne Umbau an den Callbacks
- *   weiterarbeiten kannst.
+ * Rotary-Encoder: Event-Codes wie im Demo als `(void*)` übergeben; Namen unverändert zu den Demo-Typen.
  */
 
 

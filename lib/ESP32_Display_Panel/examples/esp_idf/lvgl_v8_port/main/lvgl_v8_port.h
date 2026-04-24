@@ -96,11 +96,10 @@
 #endif
 
 /**
- * Here, some important configurations will be set based on different anti-tearing modes and rotation angles.
- * No modification is required here.
+ * Anti-tearing mode and rotation determine buffer layout and refresh mode; typically leave this block as-is.
  *
- * Users should use `lcd_bus->configRgbFrameBufferNumber(LVGL_PORT_DISP_BUFFER_NUM);` to set the buffer number before. If screen drifting occurs, please refer to the Troubleshooting section in the README.
- * initializing the LCD bus
+ * Before LCD bus init: `lcd_bus->configRgbFrameBufferNumber(LVGL_PORT_DISP_BUFFER_NUM);`
+ * Screen drift: README, Troubleshooting section.
  */
 #define LVGL_PORT_AVOID_TEAR                    (1)
 // Set the buffer number and refresh mode according to the different modes
