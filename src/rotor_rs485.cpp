@@ -5,8 +5,8 @@
  *
  * Bus-Regel: Pro Anfrage ein ausstehendes Telegramm; nächste Anfrage erst nach ACK (oder Timeout).
  * SETASELECT (DST 255): kein Pending/ACK — sofort senden.
- * SETPOSCC: Encoder-Vorschau nur im Mitläufer-Modus an den fremden Master (DST = dessen SRC-ID), nicht an den
- * Rotor-Slave (NOTIMPL). Eigenbetrieb: kein SETPOSCC — niemand konsumiert es.
+ * SETPOSCC: Encoder-Vorschau — DST = konfigurierte Rotor-Slave-ID (wie SETPOSDG). Der Rotor antwortet nicht sinnvoll
+ * (NAK NOTIMPL), andere Clients filtern nach DST bzw. Payload „deg;rotor_id“ (USB-Spiegel wie bisher).
  * SETCONIDF / SETCONTID (DST 255): neue Controller-master_id → config.json + ACK_SETCONIDF bzw. ACK_SETCONTID.
  * GETANEMO/GETTEMPA/GETWINDDIR/GETTEMPM: nur Stillstand, ohne Fremd-PC; ACKs auch bei PC-Mitlesen.
  * GETCONANO/SETCONANO: Anemometer/Wetter-Tab (1/0) in config.json; bei 0 weiter GETTEMPA (Außentemp Rotor-Info).
@@ -237,7 +237,7 @@ static uint8_t s_angle_boot_phase = 0;
 
 /** Zuletzt #FremdMaster:RotorID:… gesehen (Millis); 0 = noch keiner */
 static uint32_t s_last_foreign_master_to_slave_ms = 0;
-/** Zuletzt gesehener Master (SRC), der unseren Slave (DST=Rotor-ID) angesprochen hat — Ziel für SETPOSCC im Mitläufer-Modus */
+/** Zuletzt gesehener Master (SRC), der unseren Slave (DST=Rotor-ID) angesprochen hat — Mitläufer-Erkennung */
 static uint8_t s_foreign_master_src_id = 0;
 
 /** Zuletzt ein gültiges Telegramm mit SRC = Slave-ID (ACK/NAK/ERR …) — Verbindungs-Watchdog */
@@ -354,16 +354,6 @@ bool rotor_rs485_is_foreign_pc_listen_mode(void)
         return false;
     }
     return (millis() - s_last_foreign_master_to_slave_ms) < ROTOR_PC_FOREIGN_SILENCE_MS;
-}
-
-/** SETPOSCC an fremden Master: nur wenn Mitläufer-Fenster aktiv — oder lokale Positionsfahrt (GETPOSDG-Polling),
- * sonst verfällt das 3s-Silence-Fenster ohne PC-Telegramm zum Slave und die Vorschau stoppt mitten in der Fahrt. */
-static bool cc_preview_to_foreign_allowed(void)
-{
-    if (rotor_rs485_is_foreign_pc_listen_mode()) {
-        return true;
-    }
-    return s_foreign_master_src_id != 0 && s_poll_pos;
 }
 
 static void clear_pending()
@@ -711,28 +701,19 @@ static void try_flush_setposcc(void)
     if (!s_setposcc_queued || !bus_send_allowed_by_fault()) {
         return;
     }
-    if (!cc_preview_to_foreign_allowed()) {
-        s_setposcc_queued = false;
-        return;
-    }
-    if (s_foreign_master_src_id == 0) {
-        return;
-    }
     char deg_buf[40];
     format_deg_param(deg_buf, sizeof(deg_buf), s_setposcc_queued_deg);
     char p[64];
     // SETPOSCC-Payload: "<deg>;<rotor_id>" damit der fremde Master den richtigen Rotor zuordnen kann.
     snprintf(p, sizeof(p), "%s;%u", deg_buf, (unsigned)s_slave_id);
-    send_line_to(s_foreign_master_src_id, "SETPOSCC", p);
+    /* DST = eingestellte Rotor-ID: Slave ignoriert/NAK, andere Bus-Clients ordnen eindeutig zu. */
+    send_line_to(s_slave_id, "SETPOSCC", p);
     s_setposcc_queued = false;
 }
 
 void rotor_rs485_send_setposcc_degrees(float deg)
 {
     if (!bus_send_allowed_by_fault()) {
-        return;
-    }
-    if (!cc_preview_to_foreign_allowed()) {
         return;
     }
     s_setposcc_queued_deg = normalize_deg_0_360(deg);

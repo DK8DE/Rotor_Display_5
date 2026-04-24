@@ -124,9 +124,9 @@ bool rotor_rs485_goto_degrees(float deg);
 
 /**
  * SETPOSCC: Preview-Soll als Payload "<deg>;<rotor_id>" (z. B. "151,30;20"), ohne ACK/Pending.
- * Nur im Mitläufer-Modus (fremder Master spricht den Rotor an): Telegramm geht an diesen Master (DST),
- * nicht an den Rotor — der Slave liefert sonst NAK_SETPOSCC:NOTIMPL. Eigenbetrieb: kein Versand.
- * Wird gequeued und in rotor_rs485_loop geflusht, sobald kein anderes Telegramm aussteht.
+ * DST = konfigurierte Rotor-Slave-ID (wie normale Rotor-Befehle): der Slave liefert ggf. NAK NOTIMPL,
+ * andere Clients erkennen am Ziel (und Payload) den gemeinten Rotor (USB-Spiegel wie andere TX).
+ * Wird gequeued und in rotor_rs485_loop per try_flush gesendet (priorisierter Bus-Slot).
  */
 void rotor_rs485_send_setposcc_degrees(float deg);
 

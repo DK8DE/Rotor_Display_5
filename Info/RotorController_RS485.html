@@ -579,9 +579,9 @@
 <td><b><a href="#cmd-SETPOSDG">SETPOSDG</a></b><br>Positionsfahrt in Grad starten.</td>
 </tr>
 <tr>
-<td><code>#2:1:SETPOSCC:&lt;deg&gt;;&lt;rotor_id&gt;:CS$</code></td>
+<td><code>#&lt;SRC&gt;:&lt;rotor_id&gt;:SETPOSCC:&lt;deg&gt;;&lt;rotor_id&gt;:CS$</code></td>
 <td><span class="muted">(kein Slave-Pflicht-ACK; optional NAK je nach Gerät)</span></td>
-<td><b><a href="#cmd-SETPOSCC">SETPOSCC</a></b><br>Encoder-Vorschau-Soll (Display-Controller): Payload ist <code>&lt;deg&gt;;&lt;rotor_id&gt;</code>, kein Fahrauftrag. Auf USB mitgespiegelt — PC kann den Sollzeiger des richtigen Rotors vor SETPOSDG nachführen.</td>
+<td><b><a href="#cmd-SETPOSCC">SETPOSCC</a></b><br>Encoder-Vorschau-Soll (Display-Controller): <code>DST</code> = eingestellte Rotor-Slave-ID (wie <code>SETPOSDG</code>), Payload <code>&lt;deg&gt;;&lt;rotor_id&gt;</code> (typisch gleiche ID), kein Fahrauftrag. Auf RS485 und USB (Monitor) — Clients filtern nach <code>DST</code> bzw. Payload-Teil&nbsp;2.</td>
 </tr>
 <tr>
 <td><code>#0:20:GETID:...:CS$</code></td>
@@ -1003,9 +1003,9 @@
 <hr>
 <h4 id="cmd-SETPOSCC"><code>SETPOSCC</code></h4>
 <p><b>Was es macht:</b> Nur Anzeige-/Vorschau-Soll melden (Encoder am Display-Controller) — <b>keine</b> Positionsfahrt am Rotor.</p>
-<p><b>Details:</b> Payload ist jetzt zweiteilig: <code>&lt;deg&gt;;&lt;rotor_id&gt;</code> (z. B. <code>151,30;20</code>). Wird bei jedem Encoder-Schritt gesendet, sobald <code>taget</code> auf dem Display neu steht; das eigentliche <code>SETPOSDG</code> folgt erst nach Encoder-Ruhepause. Gleichzeitig auf RS485 und USB (Monitor) ausgegeben, damit PC-Software den Sollzeiger früh in die richtige Richtung drehen kann.</p>
-<p><b>Neue Paketbeispiele:</b> <code>#2:1:SETPOSCC:151,30;20:23$</code>, <code>#2:1:SETPOSCC:87,00;21:24$</code>.</p>
-<p><b>PC-Software Verarbeitung (empfohlen):</b> Bei <code>SETPOSCC</code> den Parameterstring an <code>;</code> splitten. Teil&nbsp;1 = Vorschauwinkel in Grad (Komma-&gt;Punkt, dann Float), Teil&nbsp;2 = Rotor-ID (int). UI-Update nur auf den Rotor-Kontext anwenden, dessen ID mit Teil&nbsp;2 übereinstimmt. Frames ohne Rotor-ID (Altformat) optional als Fallback auf den aktuell selektierten Rotor mappen oder ignorieren.</p>
+<p><b>Details:</b> Telegramm geht an die <b>Rotor-Adresse</b> (<code>DST</code> = Slave-ID des Rotors, wie bei <code>GETPOSDG</code>/<code>SETPOSDG</code>). Payload zweiteilig: <code>&lt;deg&gt;;&lt;rotor_id&gt;</code> (z. B. <code>151,30;20</code> — üblicherweise gleiche Zahl wie <code>DST</code>). Wird bei jedem Encoder-Schritt gesendet, sobald <code>taget</code> auf dem Display neu steht; <code>SETPOSDG</code> folgt erst nach Encoder-Ruhepause. Auf RS485 und USB (Monitor), damit alle Bus-Teilnehmer und PC-Software den gemeinten Rotor erkennen.</p>
+<p><b>Paketbeispiele</b> (Master-ID 7, Rotor 20 bzw. 21; CS = SRC + DST + letzte Zahl im Payload = Rotor-ID): <code>#7:20:SETPOSCC:151,30;20:47$</code>, <code>#7:21:SETPOSCC:87,00;21:49$</code>.</p>
+<p><b>PC-Software Verarbeitung (empfohlen):</b> Zuerst <code>DST</code> mit der Rotor-ID des Kontexts vergleichen (und/oder Payload an <code>;</code> splitten): Teil&nbsp;1 = Vorschauwinkel in Grad (Komma-&gt;Punkt, dann Float), Teil&nbsp;2 = Rotor-ID (int). UI-Update nur anwenden, wenn <code>DST</code> bzw. Teil&nbsp;2 zum gewählten Rotor passt. Ältere Logs mit <code>DST</code> = PC-Master-ID optional weiter unterstützen oder ignorieren.</p>
 <p><b>Checksumme:</b> Unverändert nach Protokollregel (SRC + DST + letzte Zahl im Payload). Da die letzte Zahl nun die Rotor-ID ist, basiert die CS bei <code>SETPOSCC</code> auf dieser ID.</p>
 <p><b>Hinweis:</b> Der Rotor-Slave muss den Befehl nicht verstehen; unkritisch, wenn er ignoriert wird.</p>
 <hr>

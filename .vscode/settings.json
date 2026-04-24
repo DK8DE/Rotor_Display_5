@@ -7,7 +7,7 @@
     "--query-driver=${env:USERPROFILE}/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-g++*",
     "--query-driver=**/xtensa-esp32s3-elf-gcc*",
     "--query-driver=**/xtensa-esp32s3-elf-g++*",
-    "--compile-commands-dir=d:\\Rotor\\Rotor_Display_5"
+    "--compile-commands-dir=d:\\Rotor\\Rotor_Display_5\\.pio\\build\\esp32-s3-viewe"
   ],
   "clangd.fallbackFlags": []
 }
