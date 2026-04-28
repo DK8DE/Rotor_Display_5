@@ -189,8 +189,8 @@ private:
     uint32_t _accel_idle_reset_us;    /*!< Darüber: neue langsame Raste */
     uint8_t _accel_max_mult;          /*!< 2–32 */
     bool _accel_quadratic_curve;     /*!< true: (dt/th)^2, false: linear */
-    uint64_t _accel_last_event_us;
-    int8_t _accel_last_direction;     /*!< -1 links, +1 rechts, 0 = noch kein Event */
+    uint64_t _accel_last_left_event_us;   /*!< Letztes Event in Linksdrehung */
+    uint64_t _accel_last_right_event_us;  /*!< Letztes Event in Rechtsdrehung */
 
     event_callback_data_t _event_data;
     std::function<void(int, void *)> _left_event_cb;    /*!< Callback function for knob left event */

@@ -6,9 +6,8 @@
  * oder wenn der Controller (rotor_rs485 / hw_send) zu früh nach einer Slave-
  * Antwort wieder sendet, bevor Halbduplex/MAX485 sauber umgeschaltet ist.
  *
- * Schutz: Zeitbasierte Bus-Idle — nach jeder Aktivität (TX oder RX) mindestens
- * kBusIdleUs Stille, bevor erneut gesendet wird. Gilt jetzt auch fuer hw_send(),
- * nicht nur fuer USB->Bus (pump_usb_to_hw).
+ * Schutz: Zeitbasierte Bus-Idle — Controller-TX (hw_send) wartet kBusIdleUs;
+ * USB->RS485 (pump_usb_to_hw) nutzt kuerzeres kBusIdleUsUsbForward, damit PC-Polling fluessig bleibt.
  */
 
 #include "serial_bridge.h"
@@ -43,12 +42,18 @@ static constexpr size_t kHwToUsbBuf = 512;
 static constexpr uint32_t kTurnaroundMicros = 250;
 
 /**
- * Mindest-Stille vor erneutem Senden (Controller + USB). 12 ms ≈ 138 Byte-Zeiten
+ * Mindest-Stille vor erneutem Senden (nur Controller-hw_send). 12 ms ≈ 138 Byte-Zeiten
  * @ 115200 — groessere Marge fuer MAX485/Slave-Umschaltung (sonst lange GETREF-Timeouts).
  */
 static constexpr uint32_t kBusIdleUs = 12000;
 /** SETPOSCC-Priorität: deutlich kürzere Mindest-Stille vor Senden. */
 static constexpr uint32_t kBusIdleUsPriority = 1800;
+/**
+ * USB (PC) → RS485: kürzeres Idle als Controller-TX — der PC pollt oft (GETPOSDG);
+ * 12 ms hier würde mit loop()-Takt zu spürbar langsamen seriellen Antworten führen.
+ * Nach letztem RX-Byte ist der Slave typisch schon im Empfang; ~2 ms reichen als Marge.
+ */
+static constexpr uint32_t kBusIdleUsUsbForward = 2000;
 
 /** Max. Warten auf Bus-Idle (ms); muss deutlich > kBusIdleUs sein, sonst Senden ohne Pause. */
 static constexpr uint32_t kBusIdleWaitCapMs = 200;
@@ -280,15 +285,28 @@ static bool bus_clear_for_tx()
     return (uint32_t)(micros() - s_last_bus_activity_us) >= kBusIdleUs;
 }
 
+/** Wie bus_clear_for_tx, aber kürzeres Mindest-Idle — nur für PC → RS485 (siehe kBusIdleUsUsbForward). */
+static bool bus_clear_for_usb_forward()
+{
+    uart_lock();
+    const bool has_rx = (s_hw->available() > 0);
+    uart_unlock();
+    if (has_rx) {
+        return false;
+    }
+    return (uint32_t)(micros() - s_last_bus_activity_us) >= kBusIdleUsUsbForward;
+}
+
 /**
  * USB → RS485: PC-Daten auf den Bus schicken.
- * Nur wenn der Bus nachweislich idle ist (kein RX, kBusIdleUs Stille).
- * Sonst bleiben die PC-Daten im USB-CDC-Puffer → nächstes poll().
+ * Nur wenn der Bus nachweislich idle ist (kein RX, kurze Stille für USB-Weiterleitung).
+ * Sonst bleiben die PC-Daten im USB-CDC-Puffer → nächstes poll() / nächste Schleifenrunde.
+ * @return true wenn Bytes gesendet wurden
  */
-static void pump_usb_to_hw()
+static bool pump_usb_to_hw()
 {
-    if (!bus_clear_for_tx()) {
-        return;
+    if (!bus_clear_for_usb_forward()) {
+        return false;
     }
 
     uint8_t buf[kUsbToHwBuf];
@@ -301,7 +319,7 @@ static void pump_usb_to_hw()
         buf[n++] = static_cast<uint8_t>(c);
     }
     if (n == 0) {
-        return;
+        return false;
     }
 
     uart_lock();
@@ -315,6 +333,7 @@ static void pump_usb_to_hw()
     uart_unlock();
     s_last_bus_activity_us = micros();
     rotor_rs485_rx_bytes(buf, n);
+    return true;
 }
 
 /** UART → USB + Parser: komplett leeren (mehrere Blöcke). */
@@ -345,9 +364,21 @@ static void pump_hw_to_usb_and_parser()
 void poll()
 {
     drain_usb_mirror_pending_to_cdc();
-    /* ERST Bus leeren (Rotor-Antworten), DANN (nur wenn Bus idle) PC-Daten senden. */
-    pump_hw_to_usb_and_parser();
-    pump_usb_to_hw();
+    /*
+     * Mehrere Zyklen pro poll(): sonst bei langsamer loop() nur ein USB-Chunk pro Durchlauf
+     * und 12-ms-Idle-Verhalten fühlte sich wie ~1 s Blockaden an (GETPOSDG-Sturm vom PC).
+     */
+    constexpr int kMaxUsbPumpIters = 48;
+    for (int i = 0; i < kMaxUsbPumpIters; ++i) {
+        pump_hw_to_usb_and_parser();
+        if (!pump_usb_to_hw()) {
+            break;
+        }
+        if ((i & 7) == 7) {
+            drain_usb_mirror_pending_to_cdc();
+            yield();
+        }
+    }
     drain_usb_mirror_pending_to_cdc();
     yield();
 }

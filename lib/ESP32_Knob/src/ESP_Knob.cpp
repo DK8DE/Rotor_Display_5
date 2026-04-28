@@ -23,8 +23,8 @@ ESP_Knob::ESP_Knob(int gpio_encoder_a, int gpio_encoder_b):
     _accel_idle_reset_us(200000),
     _accel_max_mult(4),
     _accel_quadratic_curve(true),
-    _accel_last_event_us(0),
-    _accel_last_direction(0),
+    _accel_last_left_event_us(0),
+    _accel_last_right_event_us(0),
     _event_data({this, NULL})
 {
 }
@@ -108,22 +108,21 @@ void ESP_Knob::setAccelerationIdleResetUs(uint32_t idle_us)
 int ESP_Knob::computeAccelSteps(int8_t direction)
 {
     if (_accel_percent == 0U || _accel_max_mult <= 1U) {
-        _accel_last_direction = direction;
-        _accel_last_event_us = esp_timer_get_time();
+        const uint64_t now_simple = esp_timer_get_time();
+        if (direction < 0) {
+            _accel_last_left_event_us = now_simple;
+        } else {
+            _accel_last_right_event_us = now_simple;
+        }
         return 1;
     }
 
     const uint64_t now = esp_timer_get_time();
+    uint64_t *last_event_us = (direction < 0) ? &_accel_last_left_event_us : &_accel_last_right_event_us;
     int steps = 1;
 
-    if (_accel_last_direction != 0 && _accel_last_direction != direction) {
-        _accel_last_direction = direction;
-        _accel_last_event_us = now;
-        return 1;
-    }
-
-    if (_accel_last_event_us != 0ULL) {
-        const uint64_t dt = now - _accel_last_event_us;
+    if (*last_event_us != 0ULL) {
+        const uint64_t dt = now - *last_event_us;
         if (dt > static_cast<uint64_t>(_accel_idle_reset_us)) {
             steps = 1;
         } else if (dt < static_cast<uint64_t>(_accel_threshold_us)) {
@@ -144,8 +143,7 @@ int ESP_Knob::computeAccelSteps(int8_t direction)
         }
     }
 
-    _accel_last_direction = direction;
-    _accel_last_event_us = now;
+    *last_event_us = now;
     return steps;
 }
 
