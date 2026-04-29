@@ -154,13 +154,12 @@ static void antenna_apply_style(uint8_t active_1_to_3)
     }
 }
 
-extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3)
+extern "C" void rotor_app_apply_remote_antenna_selection_deferred(uint8_t prev_1_to_3, uint8_t n_1_to_3)
 {
-    if (n_1_to_3 < 1u || n_1_to_3 > 3u) {
+    if (n_1_to_3 < 1u || n_1_to_3 > 3u || prev_1_to_3 < 1u || prev_1_to_3 > 3u) {
         return;
     }
-    const uint8_t prev = pwm_config_get_last_antenna();
-    if (prev == n_1_to_3) {
+    if (prev_1_to_3 == n_1_to_3) {
         return;
     }
     pwm_config_set_last_antenna(n_1_to_3);
@@ -169,7 +168,7 @@ extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3)
     lvgl_port_lock(-1);
     antenna_apply_style(n_1_to_3);
     /* Mitläufer (fremder Master): kein eigenes SETPOSDG — PC-Software sendet Soll; nur Anzeige/Arc anpassen. */
-    rotor_app_antenna_switch_from_ui(prev, !rotor_rs485_is_foreign_pc_listen_mode());
+    rotor_app_antenna_switch_from_ui(prev_1_to_3, !rotor_rs485_is_foreign_pc_listen_mode());
     lvgl_port_unlock();
 }
 

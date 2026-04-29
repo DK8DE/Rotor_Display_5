@@ -8,6 +8,11 @@
 
 namespace serial_bridge {
 
+enum class BridgeMode : uint8_t {
+    LocalMaster = 0,
+    PcProxyMaster = 1,
+};
+
 /** UART-Baud (USB und HW identisch). */
 void set_baud(uint32_t baud);
 
@@ -16,6 +21,10 @@ void begin();
 
 /** Eine Runde USB↔UART; typischerweise am Anfang von Arduino loop(). */
 void poll();
+
+/** Umschalten zwischen lokalem Master und PC-Proxy-Master. */
+void set_mode(BridgeMode mode);
+BridgeMode get_mode();
 
 /**
  * Gemeinsamer Mutex für Zugriff auf Serial2 (RS485), falls mehrere Module senden/empfangen.

@@ -47,7 +47,6 @@
 #include "serial_bridge.h"
 
 extern "C" void rotor_app_antenna_offset_changed(void);
-extern "C" void rotor_app_apply_remote_antenna_selection(uint8_t n_1_to_3);
 
 #ifndef ROTOR_RS485_MASTER_ID
 #define ROTOR_RS485_MASTER_ID 2u
@@ -156,8 +155,32 @@ static rotor_rs485_target_cb_t s_target_cb = nullptr;
 
 /** Nicht im UART-Parser: rotor_app_antenna_offset_changed (Flash nicht im Parser) */
 static bool s_pending_antenna_offset_notify = false;
-/** SET* config: pwm_config_save + UI (LVGL) in rotor_rs485_idle_tasks */
+/** SET* config: UI (LVGL) in rotor_rs485_idle_tasks; config.json siehe s_pending_pwm_config_save */
 static bool s_pending_config_changed_from_bus = false;
+/** config.json: pwm_config_save() nur im Haupt-loop, nicht im RS485-/USB-Parser (Proxy/FFat/WDT). */
+static bool s_pending_pwm_config_save = false;
+
+static inline void schedule_pwm_config_save_from_bus(void)
+{
+    s_pending_pwm_config_save = true;
+}
+
+/** SETASELECT per Bus/USB: Flash/LVGL nur in rotor_rs485_idle_tasks (nicht Parser-/Bridge-Task). */
+static bool s_pending_remote_antenna = false;
+static uint8_t s_remote_ant_orig_prev = 1;
+static uint8_t s_remote_ant_new = 1;
+
+static void queue_remote_antenna_apply(uint8_t prev, uint8_t n)
+{
+    if (n < 1u || n > 3u || prev < 1u || prev > 3u || prev == n) {
+        return;
+    }
+    if (!s_pending_remote_antenna) {
+        s_remote_ant_orig_prev = prev;
+    }
+    s_remote_ant_new = n;
+    s_pending_remote_antenna = true;
+}
 
 /** Viele ACK_GETPOSDG in einem poll(): Ist-Callback nur einmal pro loop() — sonst blockiert LVGL die UART-Verarbeitung. */
 static bool s_pos_ui_deferred = false;
@@ -295,6 +318,14 @@ void rotor_rs485_set_target_callback(rotor_rs485_target_cb_t cb) { s_target_cb =
 void rotor_rs485_idle_tasks(void)
 {
     flush_deferred_position_ui();
+    if (s_pending_pwm_config_save) {
+        s_pending_pwm_config_save = false;
+        pwm_config_save();
+    }
+    if (s_pending_remote_antenna) {
+        s_pending_remote_antenna = false;
+        rotor_app_apply_remote_antenna_selection_deferred(s_remote_ant_orig_prev, s_remote_ant_new);
+    }
     if (s_pending_antenna_offset_notify) {
         s_pending_antenna_offset_notify = false;
         rotor_app_antenna_offset_changed();
@@ -1142,7 +1173,7 @@ static void handle_broadcast_set_controller_master_id(const char *line, unsigned
         return;
     }
     pwm_config_set_master_id((uint8_t)v);
-    pwm_config_save();
+    schedule_pwm_config_save_from_bus();
     rotor_rs485_set_master_id((uint8_t)v);
     s_pending_config_changed_from_bus = true;
     char p[8];
@@ -1186,7 +1217,7 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
             return true;
         }
         pwm_config_set_rotor_id((uint8_t)v);
-        pwm_config_save();
+        schedule_pwm_config_save_from_bus();
         s_pending_config_changed_from_bus = true;
         config_reply_ack_u8(src, "ACK_SETCONRID", (uint8_t)v);
         return true;
@@ -1212,7 +1243,7 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
             return true;
         }
         pwm_config_set_master_id((uint8_t)v);
-        pwm_config_save();
+        schedule_pwm_config_save_from_bus();
         s_pending_config_changed_from_bus = true;
         config_reply_ack_u8(src, "ACK_SETCONTID", (uint8_t)v);
         return true;
@@ -1238,7 +1269,7 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
             return true;
         }
         pwm_config_set_slow((uint8_t)v);
-        pwm_config_save();
+        schedule_pwm_config_save_from_bus();
         s_pending_config_changed_from_bus = true;
         config_reply_ack_u8(src, "ACK_SETCONSPWM", (uint8_t)v);
         return true;
@@ -1264,7 +1295,7 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
             return true;
         }
         pwm_config_set_fast((uint8_t)v);
-        pwm_config_save();
+        schedule_pwm_config_save_from_bus();
         s_pending_config_changed_from_bus = true;
         config_reply_ack_u8(src, "ACK_SETCONFPWM", (uint8_t)v);
         return true;
@@ -1290,7 +1321,7 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
             return true;
         }
         pwm_config_set_touch_beep_freq_hz((uint16_t)v);
-        pwm_config_save();
+        schedule_pwm_config_save_from_bus();
         config_reply_ack_u16(src, "ACK_SETCONFRQ", pwm_config_get_touch_beep_freq_hz());
         return true;
     }
@@ -1315,7 +1346,7 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
             return true;
         }
         pwm_config_set_touch_beep_vol((uint8_t)v);
-        pwm_config_save();
+        schedule_pwm_config_save_from_bus();
         config_reply_ack_u8(src, "ACK_SETLSL", pwm_config_get_touch_beep_vol());
         return true;
     }
@@ -1340,7 +1371,7 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
             return true;
         }
         pwm_config_set_anemometer((uint8_t)v);
-        pwm_config_save();
+        schedule_pwm_config_save_from_bus();
         s_pending_config_changed_from_bus = true;
         config_reply_ack_u8(src, "ACK_SETCONANO", pwm_config_get_anemometer());
         return true;
@@ -1366,7 +1397,7 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
             return true;
         }
         pwm_config_set_encoder_delta_tenths((uint8_t)v);
-        pwm_config_save();
+        schedule_pwm_config_save_from_bus();
         s_pending_config_changed_from_bus = true;
         config_reply_ack_u8(src, "ACK_SETCONDELTA", pwm_config_get_encoder_delta_tenths());
         return true;
@@ -1392,7 +1423,7 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
             return true;
         }
         pwm_config_set_concha((uint8_t)v);
-        pwm_config_save();
+        schedule_pwm_config_save_from_bus();
         s_pending_config_changed_from_bus = true;
         config_reply_ack_u8(src, "ACK_SETCONCHA", pwm_config_get_concha());
         return true;
@@ -1418,7 +1449,7 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
             return true;
         }
         pwm_config_set_led_ring_brightness_pct((uint8_t)v);
-        pwm_config_save();
+        schedule_pwm_config_save_from_bus();
         s_pending_config_changed_from_bus = true;
         config_reply_ack_u8(src, "ACK_SETCONLEDP", pwm_config_get_led_ring_brightness_pct());
         return true;
@@ -1462,7 +1493,7 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
                 return true;
             }
             pwm_config_set_antenna_label(ant[i].idx, par);
-            pwm_config_save();
+            schedule_pwm_config_save_from_bus();
             s_pending_config_changed_from_bus = true;
             config_reply_ack_label(src, ant[i].ack_set, pwm_config_get_antenna_label(ant[i].idx));
             return true;
@@ -1480,7 +1511,8 @@ static void dispatch_bus_command_to_slave(const char *line, unsigned src)
     {
         unsigned ant = 0;
         if (parse_setaselect_antenna_1_to_3(line, &ant)) {
-            rotor_app_apply_remote_antenna_selection((uint8_t)ant);
+            const uint8_t prev = pwm_config_get_last_antenna();
+            queue_remote_antenna_apply(prev, (uint8_t)ant);
             return;
         }
     }
@@ -2274,7 +2306,8 @@ static void process_complete_line(const char *line, size_t len)
                     s_last_foreign_master_to_slave_ms = millis();
                     s_foreign_master_src_id = (uint8_t)src;
                 }
-                rotor_app_apply_remote_antenna_selection((uint8_t)v);
+                const uint8_t prev = pwm_config_get_last_antenna();
+                queue_remote_antenna_apply(prev, (uint8_t)v);
             }
         }
         return;

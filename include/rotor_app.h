@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -15,6 +17,14 @@ void rotor_app_weather_ui_poll(void);
 
 /** Nach pwm_config-Änderung per RS485/USB (Labels, IDs, PWM-Anzeige; LVGL intern). */
 void rotor_app_config_changed_from_bus(void);
+
+/**
+ * Antennenwahl per Bus/USB (SETASELECT): nur aus rotor_rs485_idle_tasks() im Haupt-loop —
+ * nicht aus Parser-/Bridge-Tasks (Flash/LVGL sonst WDT/Neustart).
+ * @param prev_1_to_3 Antenne vor dem Wechsel (für Kompass-/SETPOS-Umrechnung)
+ * @param new_1_to_3 Zielantenne 1…3
+ */
+void rotor_app_apply_remote_antenna_selection_deferred(uint8_t prev_1_to_3, uint8_t new_1_to_3);
 
 /**
  * Encoder: delta_tenths = Änderung in Zehntelgraden (Skalierung z. B. in main).
