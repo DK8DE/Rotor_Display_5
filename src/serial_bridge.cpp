@@ -69,7 +69,8 @@ static constexpr uint32_t kBusIdleWaitCapMs = 200;
 static constexpr uint32_t kBusIdleWaitCapPriorityMs = 35;
 static constexpr uint32_t kBusIdleWaitCapPcMs = 25;
 static constexpr uint32_t kPcProxyAutoSilenceMs = 12000;
-static constexpr uint32_t kPcProxyInFlightTimeoutMs = 320;
+static constexpr uint32_t kPcProxyInFlightTimeoutMs = 260;
+static constexpr uint32_t kPcProxyInFlightTimeoutPosMs = 185;
 
 static HardwareSerial *s_hw = &Serial2;
 static uint32_t s_baud = 115200;
@@ -221,6 +222,13 @@ enum class PcReqKind : uint8_t {
 
 static volatile PcReqKind s_pc_inflight_kind = PcReqKind::Unknown;
 
+static inline uint32_t pc_inflight_timeout_ms()
+{
+    return (s_pc_inflight_kind == PcReqKind::GetPosDg)
+               ? kPcProxyInFlightTimeoutPosMs
+               : kPcProxyInFlightTimeoutMs;
+}
+
 static PcReqKind detect_pc_req_kind(const uint8_t *data, size_t len)
 {
     if (!data || len == 0) {
@@ -368,9 +376,19 @@ static void task_arbiter(void *)
 
         if (mode_now == BridgeMode::PcProxyMaster && from_pc) {
             if (s_pc_inflight &&
-                (uint32_t)(millis() - s_pc_inflight_since_ms) < kPcProxyInFlightTimeoutMs) {
+                (uint32_t)(millis() - s_pc_inflight_since_ms) < pc_inflight_timeout_ms()) {
                 /* Noch Antwort auf vorheriges PC-Telegramm offen: Frame kurz zurückstellen. */
                 (void)xQueueSendToFront(s_tx_q_pc, &f, 0);
+                vTaskDelay(pdMS_TO_TICKS(1));
+                continue;
+            }
+        }
+        if (mode_now == BridgeMode::PcProxyMaster && !from_pc) {
+            /* Im Proxy hat PC-Verkehr Vorrang: lokale Controller-Frames nur senden,
+             * wenn kein PC-Request offen ist. So vermeiden wir Bus-Staus/ACK-Cluster. */
+            if (s_pc_inflight &&
+                (uint32_t)(millis() - s_pc_inflight_since_ms) < pc_inflight_timeout_ms()) {
+                (void)xQueueSendToFront(s_tx_q_ctrl, &f, 0);
                 vTaskDelay(pdMS_TO_TICKS(1));
                 continue;
             }
@@ -414,19 +432,12 @@ static void task_rs485_rx(void *)
             }
 
             if (b == '$') {
-                /* In-Flight erst bei komplettem RX-Telegramm freigeben (nicht bei Teil-Chunk). */
+                /* In-Flight erst bei komplettem RX-Telegramm freigeben (nicht bei Teil-Chunk).
+                 * Im Proxy auf JEDE vollständige Bus-Antwort freigeben, sonst entstehen künstliche
+                 * Wartefenster wenn ACK-Typ ≠ erwartetes ACK_GETPOSDG (z. B. ACK_SETPOSDG). */
                 if (s_mode == BridgeMode::PcProxyMaster) {
-                    if (s_pc_inflight_kind == PcReqKind::GetPosDg) {
-                        const char *line = reinterpret_cast<const char *>(s_rx_frame);
-                        if (strstr(line, ":ACK_GETPOSDG:") || strstr(line, ":NAK_GETPOSDG:") ||
-                            strstr(line, ":ERR:")) {
-                            s_pc_inflight = false;
-                            s_pc_inflight_kind = PcReqKind::Unknown;
-                        }
-                    } else {
-                        s_pc_inflight = false;
-                        s_pc_inflight_kind = PcReqKind::Unknown;
-                    }
+                    s_pc_inflight = false;
+                    s_pc_inflight_kind = PcReqKind::Unknown;
                 }
                 s_rx_in_frame = false;
                 s_rx_frame_len = 0;
@@ -487,7 +498,7 @@ static void task_usb_ingress(void *)
             read_any = true;
             s_last_pc_frame_ms = millis();
             s_mode = BridgeMode::PcProxyMaster;
-            if ((uint32_t)(millis() - s_pc_inflight_since_ms) >= kPcProxyInFlightTimeoutMs) {
+            if ((uint32_t)(millis() - s_pc_inflight_since_ms) >= pc_inflight_timeout_ms()) {
                 s_pc_inflight = false;
                 s_pc_inflight_kind = PcReqKind::Unknown;
             }
