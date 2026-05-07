@@ -78,6 +78,9 @@ static volatile BridgeMode s_mode = BridgeMode::LocalMaster;
 static volatile uint32_t s_last_pc_frame_ms = 0;
 static volatile bool s_pc_inflight = false;
 static volatile uint32_t s_pc_inflight_since_ms = 0;
+static volatile uint8_t s_pc_inflight_expect_src = 0;
+static volatile uint8_t s_pc_inflight_expect_dst = 0;
+static volatile bool s_pc_inflight_expect_valid = false;
 
 /** Zeitstempel der letzten Bus-Aktivität (TX oder RX), micros(). */
 static uint32_t s_last_bus_activity_us = 0;
@@ -240,6 +243,48 @@ static PcReqKind detect_pc_req_kind(const uint8_t *data, size_t len)
     return PcReqKind::Unknown;
 }
 
+static bool parse_frame_src_dst(const uint8_t *data, size_t len, uint8_t *src, uint8_t *dst)
+{
+    if (!data || len < 5 || data[0] != '#') {
+        return false;
+    }
+    size_t i = 1;
+    unsigned s = 0;
+    unsigned d = 0;
+    bool have_src_digit = false;
+    bool have_dst_digit = false;
+    while (i < len && data[i] >= '0' && data[i] <= '9') {
+        have_src_digit = true;
+        s = s * 10u + (unsigned)(data[i] - '0');
+        if (s > 255u) {
+            return false;
+        }
+        i++;
+    }
+    if (!have_src_digit || i >= len || data[i] != ':') {
+        return false;
+    }
+    i++;
+    while (i < len && data[i] >= '0' && data[i] <= '9') {
+        have_dst_digit = true;
+        d = d * 10u + (unsigned)(data[i] - '0');
+        if (d > 255u) {
+            return false;
+        }
+        i++;
+    }
+    if (!have_dst_digit || i >= len || data[i] != ':') {
+        return false;
+    }
+    if (src) {
+        *src = (uint8_t)s;
+    }
+    if (dst) {
+        *dst = (uint8_t)d;
+    }
+    return true;
+}
+
 static bool enqueue_frame(QueueHandle_t q, const uint8_t *data, size_t len, uint8_t flags)
 {
     if (!q || !data || len == 0) {
@@ -348,6 +393,12 @@ static void task_arbiter(void *)
         bool have = false;
         bool from_pc = false;
         const BridgeMode mode_now = get_mode();
+        if (mode_now == BridgeMode::PcProxyMaster && s_pc_inflight &&
+            (uint32_t)(millis() - s_pc_inflight_since_ms) >= pc_inflight_timeout_ms()) {
+            s_pc_inflight = false;
+            s_pc_inflight_kind = PcReqKind::Unknown;
+            s_pc_inflight_expect_valid = false;
+        }
 
         if (mode_now == BridgeMode::PcProxyMaster) {
             have = try_receive_frame(s_tx_q_pc, &f);
@@ -373,7 +424,6 @@ static void task_arbiter(void *)
             }
             from_pc = true;
         }
-
         if (mode_now == BridgeMode::PcProxyMaster && from_pc) {
             if (s_pc_inflight &&
                 (uint32_t)(millis() - s_pc_inflight_since_ms) < pc_inflight_timeout_ms()) {
@@ -398,6 +448,16 @@ static void task_arbiter(void *)
             s_pc_inflight = true;
             s_pc_inflight_since_ms = millis();
             s_pc_inflight_kind = detect_pc_req_kind(f.data, f.len);
+            uint8_t req_src = 0;
+            uint8_t req_dst = 0;
+            if (parse_frame_src_dst(f.data, f.len, &req_src, &req_dst)) {
+                /* Auf Antwort vom adressierten Slave an den ursprünglichen PC-Sender warten. */
+                s_pc_inflight_expect_src = req_dst;
+                s_pc_inflight_expect_dst = req_src;
+                s_pc_inflight_expect_valid = true;
+            } else {
+                s_pc_inflight_expect_valid = false;
+            }
         }
     }
 }
@@ -433,11 +493,24 @@ static void task_rs485_rx(void *)
 
             if (b == '$') {
                 /* In-Flight erst bei komplettem RX-Telegramm freigeben (nicht bei Teil-Chunk).
-                 * Im Proxy auf JEDE vollständige Bus-Antwort freigeben, sonst entstehen künstliche
-                 * Wartefenster wenn ACK-Typ ≠ erwartetes ACK_GETPOSDG (z. B. ACK_SETPOSDG). */
+                 * Im Proxy nur bei passendem Antwort-Adresspaar (src/dst) freigeben:
+                 * sonst kann ein fremdes ACK den Slot zu früh öffnen und GETPOSDG stauen. */
                 if (s_mode == BridgeMode::PcProxyMaster) {
-                    s_pc_inflight = false;
-                    s_pc_inflight_kind = PcReqKind::Unknown;
+                    if (s_pc_inflight) {
+                        bool release = false;
+                        uint8_t rx_src = 0;
+                        uint8_t rx_dst = 0;
+                        if (s_pc_inflight_expect_valid && parse_frame_src_dst(s_rx_frame, s_rx_frame_len, &rx_src, &rx_dst)) {
+                            release = (rx_src == s_pc_inflight_expect_src && rx_dst == s_pc_inflight_expect_dst);
+                        } else if (!s_pc_inflight_expect_valid) {
+                            release = true;
+                        }
+                        if (release) {
+                            s_pc_inflight = false;
+                            s_pc_inflight_kind = PcReqKind::Unknown;
+                            s_pc_inflight_expect_valid = false;
+                        }
+                    }
                 }
                 s_rx_in_frame = false;
                 s_rx_frame_len = 0;
@@ -501,6 +574,7 @@ static void task_usb_ingress(void *)
             if ((uint32_t)(millis() - s_pc_inflight_since_ms) >= pc_inflight_timeout_ms()) {
                 s_pc_inflight = false;
                 s_pc_inflight_kind = PcReqKind::Unknown;
+                s_pc_inflight_expect_valid = false;
             }
             uint8_t b = static_cast<uint8_t>(c);
             if (!in_frame) {

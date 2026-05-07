@@ -384,6 +384,11 @@ float rotor_rs485_get_last_position_deg(void) { return s_last_pos_ui_deg; }
 
 bool rotor_rs485_is_foreign_pc_listen_mode(void)
 {
+    /* PC-Proxy aktiv (USB->Controller->Bus): lokale Hintergrund-GETs drosseln, auch wenn
+     * PC dieselbe Master-ID wie der Controller verwendet. Sonst entstehen ACK-Cluster/Stau. */
+    if (serial_bridge::get_mode() == serial_bridge::BridgeMode::PcProxyMaster) {
+        return true;
+    }
     if (s_last_foreign_master_to_slave_ms == 0) {
         return false;
     }
@@ -2645,6 +2650,39 @@ void rotor_rs485_loop(void)
     /* SETPOSCC nutzt kein Pending — muss auch laufen während GETPOSDG/anderes ACK aussteht, sonst kein
      * Vorschau-Telegramm beim Encoder während Positionsfahrt oder direkt danach. */
     try_flush_setposcc();
+
+    if (rotor_rs485_is_foreign_pc_listen_mode() && s_pending != Pending::None) {
+        /* Proxy aktiv: lokale Hintergrund-Requests nicht weiter blockieren lassen. */
+        switch (s_pending) {
+        case Pending::GetAnemo:
+        case Pending::GetTempA:
+        case Pending::GetWindDir:
+        case Pending::GetTempM:
+        case Pending::GetErr:
+        case Pending::GetAntOff1:
+        case Pending::GetAntOff2:
+        case Pending::GetAntOff3:
+        case Pending::GetAngle1:
+        case Pending::GetAngle2:
+        case Pending::GetAngle3:
+            clear_pending();
+            break;
+        case Pending::GetRef:
+            if (!s_poll_ref && rotor_error_app_get_error_code() != 10) {
+                clear_pending();
+                s_request_pos_after_homing = false;
+                s_homing_wait_unref_seen = false;
+            }
+            break;
+        case Pending::GetPosDg:
+            if (!s_poll_pos) {
+                clear_pending();
+            }
+            break;
+        default:
+            break;
+        }
+    }
 
     if (s_pending != Pending::None) {
         return;
