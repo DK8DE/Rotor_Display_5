@@ -219,6 +219,8 @@ static bool s_startup_err_known = false;
 static bool s_align_target_after_pos_read = false;
 /** Nach SETREF/Homing: bei nächstem GETREF=referenziert einmal GETPOSDG anfordern */
 static bool s_request_pos_after_homing = false;
+/** Homing-Start aus Referenz-Zustand: erstes verfrühtes GETREF=1 ignorieren, bis einmal GETREF=0 kam. */
+static bool s_homing_wait_unref_seen = false;
 
 /** Lange Telegramme: ACK_GETACCBINS/GETCALBINS/… (viele Semikolon-getrennte Zahlen) — 320 war zu knapp */
 static char s_rx[1536];
@@ -306,6 +308,7 @@ static void stop_fault_motion_polling(void)
     s_hw_snap_retarget_active = false;
     s_poll_ref = false;
     s_request_pos_after_homing = false;
+    s_homing_wait_unref_seen = false;
 }
 
 void rotor_rs485_set_master_id(uint8_t id) { s_master_id = id; }
@@ -616,6 +619,7 @@ void rotor_rs485_send_setref_homing(void)
     send_request("SETREF", "1", Pending::SetRef);
     s_poll_ref = true;
     s_request_pos_after_homing = true;
+    s_homing_wait_unref_seen = true;
 }
 
 bool rotor_rs485_send_stop(void)
@@ -635,6 +639,7 @@ bool rotor_rs485_send_stop(void)
     s_pos_grace_end_ms = 0;
     s_poll_ref = false;
     s_request_pos_after_homing = false;
+    s_homing_wait_unref_seen = false;
     s_remote_setpos_motion = false;
     s_remote_setpos_grace_end_ms = 0;
     send_request("STOP", "0", Pending::Stop);
@@ -1524,6 +1529,7 @@ static void dispatch_bus_command_to_slave(const char *line, unsigned src)
         if (parse_setref_command_param(line, &ref_cmd) && ref_cmd != 0) {
             s_poll_ref = true;
             s_request_pos_after_homing = true;
+            s_homing_wait_unref_seen = true;
             s_next_ref_poll_ms = millis() + ROTOR_POLL_GAP_MS;
         }
     }
@@ -1914,8 +1920,15 @@ static bool parse_ack_getref(const char *line)
         p++;
     }
     valbuf[i] = '\0';
-    int v = (int)(strtof(valbuf, nullptr) + 0.5f);
-    bool ref_ok = (v != 0);
+    const int v = (int)(strtof(valbuf, nullptr) + 0.5f);
+    const bool ref_ok_raw = (v != 0);
+    /* Einige Rotoren liefern direkt nach SETREF kurz noch GETREF=1, obwohl Homing schon läuft.
+     * Damit die UI nicht vorzeitig von "Referenziere" auf "Nicht referenziert" springt:
+     * während aktivem Homing erst einmal GETREF=0 sehen, dann das nächste GETREF=1 akzeptieren. */
+    if (s_poll_ref && s_request_pos_after_homing && s_homing_wait_unref_seen && !ref_ok_raw) {
+        s_homing_wait_unref_seen = false;
+    }
+    const bool ref_ok = (s_poll_ref && s_request_pos_after_homing && s_homing_wait_unref_seen) ? false : ref_ok_raw;
     const bool was_referenced = s_slave_referenced;
     notify_ref(ref_ok);
     const bool became_referenced = ref_ok && !was_referenced;
@@ -1950,6 +1963,7 @@ static bool parse_ack_getref(const char *line)
     if (ref_ok && s_request_pos_after_homing) {
         s_request_pos_after_homing = false;
         s_poll_ref = false;
+        s_homing_wait_unref_seen = false;
         /* Sonst kein GETPOSDG — Ist bleibt „-“, Soll nicht angeglichen (nur Controller, kein PC) */
         s_align_target_after_pos_read = true;
         send_request("GETPOSDG", "0", Pending::GetPosDg);
@@ -1962,6 +1976,7 @@ static bool parse_ack_getref(const char *line)
      */
     if (became_referenced && s_pending == Pending::None) {
         s_poll_ref = false;
+        s_homing_wait_unref_seen = false;
         s_align_target_after_pos_read = true;
         send_request("GETPOSDG", "0", Pending::GetPosDg);
         return true;
@@ -1969,6 +1984,7 @@ static bool parse_ack_getref(const char *line)
 
     if (ref_ok) {
         s_poll_ref = false;
+        s_homing_wait_unref_seen = false;
     } else if (s_poll_ref) {
         s_next_ref_poll_ms = millis() + ROTOR_POLL_GAP_MS;
     }
@@ -2140,6 +2156,7 @@ static bool parse_nak_and_clear(const char *line)
         clear_pending();
         s_poll_ref = false;
         s_request_pos_after_homing = false;
+        s_homing_wait_unref_seen = false;
         return true;
     }
     if (strstr(line, ":NAK_TEST:") && s_pending == Pending::Test) {

@@ -46,6 +46,24 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 
+# --- PlatformIO / Xtensa-GCC (Windows) ---
+# Ohne diesen PATH-Eintrag meldet der Build oft: xtensa-esp32s3-elf-g++ nicht gefunden,
+# obwohl das Paket unter %USERPROFILE%\.platformio\packages liegt.
+$xtensaBin = Join-Path $env:USERPROFILE '.platformio\packages\toolchain-xtensa-esp-elf\xtensa-esp-elf\bin'
+if (Test-Path -LiteralPath $xtensaBin) {
+    $env:PATH = "$xtensaBin;$env:PATH"
+}
+$xtensaAs = Join-Path $xtensaBin 'xtensa-esp32s3-elf-as.exe'
+if (-not (Test-Path -LiteralPath $xtensaAs)) {
+    Write-Host 'WARNUNG: Toolchain scheint unvollstaendig (kein xtensa-esp32s3-elf-as.exe).' -ForegroundColor Yellow
+    Write-Host '  Loeschen: $env:USERPROFILE\.platformio\packages\toolchain-xtensa-esp-elf' -ForegroundColor Yellow
+    Write-Host '  Danach: erneut bauen (PlatformIO laedt das Paket neu).' -ForegroundColor Yellow
+}
+$pioExe = Join-Path $env:USERPROFILE '.platformio\penv\Scripts\pio.exe'
+if (-not (Test-Path -LiteralPath $pioExe)) {
+    $pioExe = 'pio'
+}
+
 $VerFile = Join-Path $PSScriptRoot 'include\firmware_version.h'
 if (-not (Test-Path -LiteralPath $VerFile)) {
     throw "Nicht gefunden: $VerFile"
@@ -100,15 +118,15 @@ function Invoke-Step {
 
 try {
     if ($Clean) {
-        Invoke-Step "pio clean" { pio run -t clean }
+        Invoke-Step "pio clean" { & $pioExe run -t clean }
     }
 
     if ($WithFs) {
         Invoke-Step "PNG -> LVGL .bin" { python tools/png_to_lvgl8_bin.py }
-        Invoke-Step "uploadfs (LittleFS)" { pio run -t uploadfs }
+        Invoke-Step "uploadfs (LittleFS)" { & $pioExe run -t uploadfs }
     }
 
-    Invoke-Step "upload Firmware (esp32-s3-viewe)" { pio run -t upload -e esp32-s3-viewe }
+    Invoke-Step "upload Firmware (esp32-s3-viewe)" { & $pioExe run -t upload -e esp32-s3-viewe }
 
     Write-Host "`nFertig." -ForegroundColor Green
 }
