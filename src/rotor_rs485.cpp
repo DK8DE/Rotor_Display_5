@@ -149,6 +149,29 @@ enum class Pending : uint8_t {
     Test
 };
 
+static bool is_proxy_blocked_poll_pending(Pending p)
+{
+    switch (p) {
+    case Pending::GetRef:
+    case Pending::GetPosDg:
+    case Pending::GetErr:
+    case Pending::GetAntOff1:
+    case Pending::GetAntOff2:
+    case Pending::GetAntOff3:
+    case Pending::GetAngle1:
+    case Pending::GetAngle2:
+    case Pending::GetAngle3:
+    case Pending::GetAnemo:
+    case Pending::GetTempA:
+    case Pending::GetWindDir:
+    case Pending::GetTempM:
+    case Pending::Test:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static uint8_t s_master_id = ROTOR_RS485_MASTER_ID;
 static uint8_t s_slave_id = ROTOR_RS485_SLAVE_ID;
 
@@ -603,6 +626,9 @@ static void send_line(const char *cmd, const char *params_str)
 static void send_request(const char *cmd, const char *params_str, Pending p)
 {
     if (!bus_send_allowed_by_fault()) {
+        return;
+    }
+    if (rotor_rs485_is_foreign_pc_listen_mode() && is_proxy_blocked_poll_pending(p)) {
         return;
     }
     send_line(cmd, params_str);
@@ -1634,36 +1660,25 @@ static void on_ack_timeout()
     if (!pending_timed_out()) {
         return;
     }
-    /* Fremd-Master bedient den Rotor: eigene GET-*-Pending nicht endlos wiederholen (Kollision).
-     * Ausnahme: lokale Positionsfahrt / Homing — sonst kein eigenes GETPOSDG/GETREF und Ist nur aus fremden ACKs. */
+    /* Proxy/Fremd-Master bedient den Rotor: eigene GET-*-Pendings nie wiederholen.
+     * Im Proxy soll der Controller den Rotor nicht pollen; Ist/Ref kommen aus mitgesnifften ACKs. */
     if (rotor_rs485_is_foreign_pc_listen_mode()) {
         switch (s_pending) {
         case Pending::GetRef:
-            /* Verbindungs-Wiederherstellung: GETREF muss trotz Fremd-Master wiederholt werden dürfen */
-            if (s_poll_ref || rotor_error_app_get_error_code() == 10) {
-                break;
-            }
-            clear_pending();
-            return;
         case Pending::GetPosDg:
-            if (s_poll_pos) {
-                break;
-            }
-            clear_pending();
-            return;
         case Pending::GetErr:
         case Pending::GetAnemo:
         case Pending::GetTempA:
         case Pending::GetWindDir:
         case Pending::GetTempM:
+        case Pending::GetAntOff1:
+        case Pending::GetAntOff2:
+        case Pending::GetAntOff3:
         case Pending::GetAngle1:
         case Pending::GetAngle2:
         case Pending::GetAngle3:
-            clear_pending();
-            return;
         case Pending::Test:
             clear_pending();
-            s_boot_test_done = true;
             return;
         default:
             break;
@@ -2772,20 +2787,9 @@ void rotor_rs485_loop(void)
         case Pending::GetAngle1:
         case Pending::GetAngle2:
         case Pending::GetAngle3:
-            clear_pending();
-            break;
         case Pending::GetRef:
-            /* Proxy-only Pfad: Pending nur dann loesen, wenn wirklich kein aktives Homing
-             * mehr laeuft. Nur auf s_poll_ref zu schauen ist zu fragil (kann transient false
-             * werden), dadurch stoppten GETREF-Polls im Proxy-Modus vorzeitig. */
-            if (!homing_active_internal() && rotor_error_app_get_error_code() != 10) {
-                clear_pending();
-            }
-            break;
         case Pending::GetPosDg:
-            if (!s_poll_pos) {
-                clear_pending();
-            }
+            clear_pending();
             break;
         default:
             break;
@@ -2793,6 +2797,13 @@ void rotor_rs485_loop(void)
     }
 
     if (s_pending != Pending::None) {
+        return;
+    }
+
+    if (rotor_rs485_is_foreign_pc_listen_mode()) {
+        if (s_boot_test_done && !s_startup_err_known) {
+            s_startup_err_known = true;
+        }
         return;
     }
 
@@ -2816,14 +2827,12 @@ void rotor_rs485_loop(void)
         return;
     }
 
-    if (rotor_rs485_is_foreign_pc_listen_mode()) {
-        if (s_boot_test_done && !s_startup_err_known) {
-            s_startup_err_known = true;
+    if (homing_active_internal()) {
+        s_poll_ref = true;
+        if ((int32_t)(millis() - s_next_ref_poll_ms) >= 0) {
+            send_request("GETREF", "0", Pending::GetRef);
         }
-        /* Ohne Ausnahme: kein eigenes GETPOSDG bei lokaler Fahrt → Ist nur über fremde Master-ACKs, wirkt wie Nachlaufen. */
-        if (!s_poll_pos && !homing_active_internal()) {
-            return;
-        }
+        return;
     }
 
     try_boot_startup_geterr();
@@ -2846,19 +2855,11 @@ void rotor_rs485_loop(void)
 
     if (s_poll_pos) {
         if (rotor_rs485_is_foreign_pc_listen_mode()) {
-            /* Fremd-PC pollt bereits GETPOSDG: keine eigene Zusatzlast senden. */
+            /* Fremd-PC pollt GETPOSDG: keine eigene Zusatzlast senden. */
             return;
         }
         if ((int32_t)(millis() - s_next_pos_poll_ms) >= 0) {
             send_request("GETPOSDG", "0", Pending::GetPosDg);
-        }
-        return;
-    }
-
-    if (homing_active_internal()) {
-        s_poll_ref = true;
-        if ((int32_t)(millis() - s_next_ref_poll_ms) >= 0) {
-            send_request("GETREF", "0", Pending::GetRef);
         }
         return;
     }

@@ -19,7 +19,7 @@ void set_baud(uint32_t baud);
 /** UART2 auf RX/TX-Pins, RS485-Dir-Pin; USB-Serial muss bereits initialisiert sein. */
 void begin();
 
-/** Eine Runde USB↔UART; typischerweise am Anfang von Arduino loop(). */
+/** Wartung der Bridge-Modus-Zeitfenster; die Datenpfade laufen in eigenen Tasks. */
 void poll();
 
 /** Umschalten zwischen lokalem Master und PC-Proxy-Master. */
@@ -27,16 +27,15 @@ void set_mode(BridgeMode mode);
 BridgeMode get_mode();
 
 /**
- * Gemeinsamer Mutex für Zugriff auf Serial2 (RS485), falls mehrere Module senden/empfangen.
- * Rotor-Protokoll und USB-Brücke nutzen dieselbe UART.
+ * Gemeinsamer Mutex für direkten Zugriff auf Serial2 (RS485).
+ * Normaler Versand soll über hw_send()/hw_send_priority() laufen.
  */
 void uart_lock();
 void uart_unlock();
 
 /**
- * RS485 senden (DE/RE umschalten, schreiben, wieder Empfang).
- * USB-Spiegel nur mit freiem CDC-Puffer (availableForWrite): ohne Leser am USB blockiert
- * kein Serial.write die Hauptschleife — Bus-RX wird trotzdem sofort geparst (taget_dg / Ist).
+ * RS485 senden. Intern wird in die zentrale RS485-TX-Queue gelegt; ein einzelner
+ * TX-Task übernimmt Bus-Idle, DE/RE-Umschaltung und UART-Write.
  */
 void hw_send(const uint8_t *data, size_t len);
 
