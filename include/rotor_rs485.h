@@ -32,6 +32,9 @@ typedef void (*rotor_rs485_target_cb_t)(float deg_deg);
 void rotor_rs485_set_master_id(uint8_t id);
 void rotor_rs485_set_slave_id(uint8_t id);
 
+/** Synchronisations-Primitiven (Parser-Mutex) anlegen. Muss VOR serial_bridge::begin()
+ * aufgerufen werden, da task_rs485_rx und task_arbiter konkurrent rotor_rs485_rx_bytes nutzen. */
+void rotor_rs485_pre_begin(void);
 /** Boot: 2 s nach Start erste GETREF, dann optional GETPOSDG (nur wenn referenziert). */
 void rotor_rs485_init(void);
 /** True nach erstem abgeschlossenen Boot-Handshake (GETREF/ggf. GETPOSDG). */

@@ -9,5 +9,6 @@
     "--query-driver=**/xtensa-esp32s3-elf-g++*",
     "--compile-commands-dir=d:/Rotor/Rotor_Display_5/.cache/clangd"
   ],
-  "clangd.fallbackFlags": []
+  "clangd.fallbackFlags": [],
+  "cmake.sourceDirectory": "D:/Rotor/Rotor_Display_5/lib/ESP32_Display_Panel"
 }

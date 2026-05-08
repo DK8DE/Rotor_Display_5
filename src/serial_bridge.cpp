@@ -85,10 +85,17 @@ static volatile bool s_pc_inflight_expect_valid = false;
 /** Zeitstempel der letzten Bus-Aktivität (TX oder RX), micros(). */
 static uint32_t s_last_bus_activity_us = 0;
 
-/** Ausstehende USB-Spiegel-Bytes (verlustfrei, auch wenn CDC kurz voll ist). */
+/** Ausstehende USB-Spiegel-Bytes (verlustfrei, auch wenn CDC kurz voll ist).
+ *  ACHTUNG: Bus-RX (task_rs485_rx, prio 4) und loop()/serial_bridge::poll() greifen beide auf
+ *  diesen Buffer und auf Serial.write() zu. Ohne Synchronisation entstehen Race Conditions:
+ *   - memmove im Pending-Push überschneidet mit Drain: Bytes verschwinden („ACK_GETWARN fehlt im Log")
+ *   - Doppelt-Drain (Bus-RX-Pfad + loop()-Pfad parallel): gleiche Bytes 2x in Serial („Doppel-ACK")
+ *   - Nicht-atomare Updates von s_usb_mirror_pending_len: bis zu 1 s Korruption sichtbar
+ *  Daher gehört JEDER Zugriff auf s_usb_mirror_pending* unter s_mirror_mutex. */
 static constexpr size_t kUsbMirrorPendingCap = 12288;
 static uint8_t s_usb_mirror_pending[kUsbMirrorPendingCap];
 static size_t s_usb_mirror_pending_len = 0;
+static SemaphoreHandle_t s_mirror_mutex = nullptr;
 
 void set_baud(uint32_t baud) { s_baud = baud; }
 
@@ -116,7 +123,8 @@ void uart_unlock()
     }
 }
 
-static void mirror_usb_pending_push(const uint8_t *data, size_t len)
+/** Pending-Push, intern. Aufrufer MUSS s_mirror_mutex halten. */
+static void mirror_usb_pending_push_locked(const uint8_t *data, size_t len)
 {
     if (!data || len == 0) {
         return;
@@ -138,7 +146,8 @@ static void mirror_usb_pending_push(const uint8_t *data, size_t len)
     s_usb_mirror_pending_len += len;
 }
 
-static void drain_usb_mirror_pending_to_cdc()
+/** Drain Pending → USB CDC, intern. Aufrufer MUSS s_mirror_mutex halten. */
+static void drain_usb_mirror_pending_to_cdc_locked()
 {
     while (s_usb_mirror_pending_len > 0) {
         const int space = Serial.availableForWrite();
@@ -155,28 +164,50 @@ static void drain_usb_mirror_pending_to_cdc()
     }
 }
 
-/** USB-Monitor: nonblocking, Überhang in Pending-FIFO statt Drop. */
+/** Externe Drain-Wrapper (von loop() via poll()). Nimmt Mutex. */
+static void drain_usb_mirror_pending_to_cdc()
+{
+    if (s_mirror_mutex && xSemaphoreTake(s_mirror_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        drain_usb_mirror_pending_to_cdc_locked();
+        xSemaphoreGive(s_mirror_mutex);
+    } else if (!s_mirror_mutex) {
+        drain_usb_mirror_pending_to_cdc_locked();
+    }
+}
+
+/** USB-Monitor: nonblocking, Überhang in Pending-FIFO statt Drop.
+ *  Synchronisiert: drain + Serial.write + pending_push laufen unter einem einzigen
+ *  Mutex-Halt, damit andere Aufrufer nicht parallel denselben Bereich anfassen. */
 static void mirror_usb_nonblocking(const uint8_t *data, size_t len)
 {
     if (!data || len == 0) {
         return;
     }
-    drain_usb_mirror_pending_to_cdc();
+    if (s_mirror_mutex) {
+        if (xSemaphoreTake(s_mirror_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+            /* Verhungert: lieber nichts spiegeln als Buffer-Korruption riskieren. */
+            return;
+        }
+    }
+    drain_usb_mirror_pending_to_cdc_locked();
     size_t off = 0;
     while (off < len) {
         const int space = Serial.availableForWrite();
         if (space <= 0) {
-            mirror_usb_pending_push(data + off, len - off);
-            return;
+            mirror_usb_pending_push_locked(data + off, len - off);
+            break;
         }
         const size_t chunk =
             (size_t)space < (len - off) ? (size_t)space : (len - off);
         const size_t w = Serial.write(data + off, chunk);
         if (w == 0) {
-            mirror_usb_pending_push(data + off, len - off);
-            return;
+            mirror_usb_pending_push_locked(data + off, len - off);
+            break;
         }
         off += w;
+    }
+    if (s_mirror_mutex) {
+        xSemaphoreGive(s_mirror_mutex);
     }
 }
 
@@ -610,8 +641,14 @@ static void task_usb_ingress(void *)
 
 void begin()
 {
+    /* Parser-Mutex VOR Task-Erzeugung anlegen — task_rs485_rx und task_arbiter rufen beide
+     * rotor_rs485_rx_bytes auf und teilen sich denselben statischen Frame-Buffer. */
+    rotor_rs485_pre_begin();
     if (!s_uart_mutex) {
         s_uart_mutex = xSemaphoreCreateMutex();
+    }
+    if (!s_mirror_mutex) {
+        s_mirror_mutex = xSemaphoreCreateMutex();
     }
     if (!s_tx_q_pc) {
         s_tx_q_pc = xQueueCreate(kTxQueueDepth, sizeof(TxFrame));
