@@ -726,8 +726,9 @@ static void on_ref_status(bool referenced)
         }
     }
     if (objects.homing_led) {
-        /* Fehler / Start-GETERR ausstehend: nicht grün nur wegen GETREF=1 */
-        if (rotor_error_app_get_error_code() != 0 || !rotor_rs485_is_startup_error_checked()) {
+        /* Harte Fehler / Start-GETERR ausstehend: nicht grün nur wegen GETREF=1 (10 = Timeout, quittierbar). */
+        const int err_led = rotor_error_app_get_error_code();
+        if ((err_led != 0 && err_led != 10) || !rotor_rs485_is_startup_error_checked()) {
             lv_led_set_color(objects.homing_led, lv_color_hex(0xff0000));
             lv_led_set_brightness(objects.homing_led, 255);
         } else {

@@ -120,8 +120,8 @@ static void apply_homing_led_fault(uint32_t now_ms)
     if (!objects.homing_led) {
         return;
     }
-    /* Fehler: immer rot blinken (Homing/Referenz nicht möglich) */
-    if (s_err_code != 0) {
+    /* Harte Fehler: rot blinken. Code 10 (Boot-Timeout) ist quittierbar — Ref-LED folgt unten Grün/Rot. */
+    if (s_err_code != 0 && s_err_code != 10) {
         if ((uint32_t)(now_ms - s_led_blink_last_ms) < ROTOR_ERR_LED_BLINK_MS) {
             return;
         }

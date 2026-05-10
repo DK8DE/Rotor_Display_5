@@ -17,6 +17,7 @@
  *
  * Verbindung: Fehler 10 (Verbindungstimeout), wenn länger kein Telegramm vom Slave (SRC=Rotor-ID)
  * oder vor erster Antwort nur Timeouts — PC- oder Controller-Abfragen zählen (ROTOR_CONN_LOST_TIMEOUT_MS).
+ * Ausnahme: während Homing (s_poll_ref/s_request_pos_after_homing) kein Link-Watchdog — Referenzfahrt kann stumm sein.
  * Fehler 10: bei ausbleibender Antwort periodisch GETREF (ROTOR_CONN_RECOVERY_GETREF_MS), bis der Slave
  * wieder antwortet; danach Referenz/GETPOSDG wie bei Boot. GETERR/ACK_ERR bleibt für echte Slave-Fehler.
  * Boot: zuerst 3× TEST:0 (Ping, je ROTOR_RS485_ACK_TIMEOUT_MS); ohne ACK_TEST/NAK_TEST → sofort Fehler 10.
@@ -1567,48 +1568,6 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
         }
     }
 
-    static const struct {
-        const char *get_tag;
-        const char *set_tag;
-        const char *ack_get;
-        const char *nak_get;
-        const char *ack_set;
-        const char *nak_set;
-        int idx;
-    } antdp[] = {
-        {":GETANTDP1:", ":SETANTDP1:", "ACK_GETANTDP1", "NAK_GETANTDP1", "ACK_SETANTDP1", "NAK_SETANTDP1", 1},
-        {":GETANTDP2:", ":SETANTDP2:", "ACK_GETANTDP2", "NAK_GETANTDP2", "ACK_SETANTDP2", "NAK_SETANTDP2", 2},
-        {":GETANTDP3:", ":SETANTDP3:", "ACK_GETANTDP3", "NAK_GETANTDP3", "ACK_SETANTDP3", "NAK_SETANTDP3", 3},
-    };
-
-    for (size_t i = 0; i < 3; i++) {
-        if (strstr(line, antdp[i].get_tag)) {
-            if (!CFG_TRY_TAG(antdp[i].get_tag)) {
-                config_reply_nak(src, antdp[i].nak_get, 2);
-                return true;
-            }
-            config_reply_ack_u8(src, antdp[i].ack_get, pwm_config_get_antdp(antdp[i].idx));
-            return true;
-        }
-    }
-    for (size_t i = 0; i < 3; i++) {
-        if (strstr(line, antdp[i].set_tag)) {
-            if (!CFG_TRY_TAG(antdp[i].set_tag)) {
-                config_reply_nak(src, antdp[i].nak_set, 2);
-                return true;
-            }
-            unsigned v = 0;
-            if (sscanf(par, "%u", &v) != 1 || v > 1u) {
-                config_reply_nak(src, antdp[i].nak_set, 1);
-                return true;
-            }
-            pwm_config_set_antdp(antdp[i].idx, (uint8_t)v);
-            schedule_pwm_config_save_from_bus();
-            config_reply_ack_u8(src, antdp[i].ack_set, pwm_config_get_antdp(antdp[i].idx));
-            return true;
-        }
-    }
-
 #undef CFG_TRY_TAG
     return false;
 }
@@ -2739,7 +2698,12 @@ void rotor_rs485_loop(void)
         return;
     }
 
-    if (err != 10 && s_boot_test_done) {
+    /* Verbindungs-Watchdog nicht während Homing-Sequenz: Slave kann bei Referenzfahrt länger
+     * als ROTOR_CONN_LOST_TIMEOUT_MS keine ACKs senden — sonst Fehler 10, stop_fault_motion_polling()
+     * bricht Homing ab (Ring stoppt, „Nicht referenziert“ obwohl der Bus danach wieder ok ist).
+     * s_poll_ref || s_request_pos_after_homing gilt auch kurz nach SETREF, solange der Slave noch
+     * GETREF=1 meldet (s_slave_referenced true), bis das erste „nicht referenziert“ verarbeitet ist. */
+    if (err != 10 && s_boot_test_done && !(s_poll_ref || s_request_pos_after_homing)) {
         const uint32_t now = millis();
         uint32_t conn_timeout_ms = ROTOR_CONN_LOST_TIMEOUT_MS;
         if (s_pending == Pending::SetPosDg) {

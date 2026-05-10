@@ -36,8 +36,6 @@ static char s_ant_label[3][48];
 static uint8_t s_last_antenna = 1;
 static float s_antoff_deg[3] = { 0.0f, 0.0f, 0.0f };
 static float s_opening_deg[3] = { 0.0f, 0.0f, 0.0f };
-/** Antennen-DP-Flag (GET/SETANTDP1..3), persistent in config.json */
-static uint8_t s_antdp[3] = { 0u, 0u, 0u };
 
 static int parse_int_after_key(const char *json, const char *key)
 {
@@ -120,7 +118,6 @@ void pwm_config_load_defaults(void)
     s_ant_label[1][sizeof(s_ant_label[1]) - 1] = '\0';
     s_ant_label[2][sizeof(s_ant_label[2]) - 1] = '\0';
     s_antoff_deg[0] = s_antoff_deg[1] = s_antoff_deg[2] = 0.0f;
-    s_antdp[0] = s_antdp[1] = s_antdp[2] = 0u;
     s_master_id = 2;
     s_rotor_id = 20;
     s_touch_beep_freq_hz = 1100;
@@ -204,18 +201,6 @@ void pwm_config_load(void)
     if (ledb >= 0 && ledb <= 100) {
         s_led_ring_brightness_pct = (uint8_t)ledb;
     }
-    int dp1 = parse_int_after_key(buf, "antdp1");
-    if (dp1 == 0 || dp1 == 1) {
-        s_antdp[0] = (uint8_t)dp1;
-    }
-    int dp2 = parse_int_after_key(buf, "antdp2");
-    if (dp2 == 0 || dp2 == 1) {
-        s_antdp[1] = (uint8_t)dp2;
-    }
-    int dp3 = parse_int_after_key(buf, "antdp3");
-    if (dp3 == 0 || dp3 == 1) {
-        s_antdp[2] = (uint8_t)dp3;
-    }
 }
 
 void pwm_config_save(void)
@@ -245,17 +230,13 @@ void pwm_config_save(void)
              "  \"anemometer\": %u,\n"
              "  \"encoder_delta\": %u,\n"
              "  \"concha\": %u,\n"
-             "  \"conledp\": %u,\n"
-             "  \"antdp1\": %u,\n"
-             "  \"antdp2\": %u,\n"
-             "  \"antdp3\": %u\n"
+             "  \"conledp\": %u\n"
              "}\n",
              (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_pwm_ui_fast, (unsigned)s_master_id,
              (unsigned)s_rotor_id, e1, e2, e3,
              (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol,
              (unsigned)s_anemometer, (unsigned)s_encoder_delta_tenths, (unsigned)s_concha,
-             (unsigned)s_led_ring_brightness_pct, (unsigned)s_antdp[0], (unsigned)s_antdp[1],
-             (unsigned)s_antdp[2]);
+             (unsigned)s_led_ring_brightness_pct);
     f.print(line);
     f.close();
 }
@@ -384,24 +365,6 @@ void pwm_config_set_opening_deg(int idx, float deg)
         deg = 360.0f;
     }
     s_opening_deg[idx - 1] = deg;
-}
-
-uint8_t pwm_config_get_antdp(int idx)
-{
-    if (idx < 1 || idx > 3) {
-        return 0u;
-    }
-    return s_antdp[idx - 1];
-}
-
-void pwm_config_set_antdp(int idx, uint8_t zero_or_one)
-{
-    if (idx < 1 || idx > 3) {
-        return;
-    }
-    if (zero_or_one <= 1u) {
-        s_antdp[idx - 1] = zero_or_one;
-    }
 }
 
 uint16_t pwm_config_get_touch_beep_freq_hz(void)
