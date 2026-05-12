@@ -22,11 +22,10 @@
  * wieder antwortet; danach Referenz/GETPOSDG wie bei Boot. GETERR/ACK_ERR bleibt für echte Slave-Fehler.
  * Boot: zuerst 3× TEST:0 (Ping, je ROTOR_RS485_ACK_TIMEOUT_MS); ohne ACK_TEST/NAK_TEST → sofort Fehler 10.
  *
- * Zweiter Master auf demselben RS485-Segment (eigenes PC-Interface, nicht „durch den Controller“ gebündelt):
- * gleiche Master-ID wie Display → ACK_GETPOSDG/ACK_SETPOSDG am Bus nicht zuordenbar, Pending kann falsch
- * gelöst werden. PC dann andere Master-ID als der Controller (config.json master_id).
- * Liest die PC-Software nur den USB-Mitschnitt des Controllers (kein eigener Bus-TX auf dieselbe Leitung),
- * entsteht dieses ACK-Problem durch den PC nicht.
+ * Zweiter Master auf demselben RS485-Segment: Mitläufer-Modus wenn DST = Rotor-Slave-ID und SRC ein
+ * anderer Master ist, oder SRC = eigene Master-ID aber andere Zeile als unser letzter TX (gleiche ID).
+ * Gleiche Master-ID ohne Bus-Echo: jede fremde Unicast-Zeile löst Mitläufer aus; Echo der eigenen Zeile
+ * innerhalb ROTOR_OWN_DST_SLAVE_LINE_MATCH_MS wird ignoriert.
  *
  * Fremd-Master auf dem Bus (z. B. PC ID 1, Display ID 2): früher wurde komplett kein eigenes GETPOSDG
  * mehr gesendet und GETPOSDG-Timeouts löschten das Pending — Ist lief nur über fremde ACKs → Nachlaufen.
@@ -106,6 +105,10 @@ extern "C" void rotor_app_antenna_offset_changed(void);
 /** Kein Fremd-Master → Rotor mehr so lange → eigenes GET-Polling wieder an */
 #ifndef ROTOR_PC_FOREIGN_SILENCE_MS
 #define ROTOR_PC_FOREIGN_SILENCE_MS 3000u
+#endif
+/** RX-Zeile gleich unserem letzten TX an den Slave innerhalb dieses Fensters → Echo, kein „Fremd mit gleicher Master-ID“. */
+#ifndef ROTOR_OWN_DST_SLAVE_LINE_MATCH_MS
+#define ROTOR_OWN_DST_SLAVE_LINE_MATCH_MS 280u
 #endif
 
 /** Referenz + Betrieb: keine Antwort vom Rotor (Slave) seit so lang → Fehler 10 Verbindungstimeout
@@ -300,6 +303,10 @@ static uint32_t s_last_foreign_master_to_slave_ms = 0;
 /** Zuletzt gesehener Master (SRC), der unseren Slave (DST=Rotor-ID) angesprochen hat — Mitläufer-Erkennung */
 static uint8_t s_foreign_master_src_id = 0;
 
+/** Letztes von uns gesendetes Unicast an s_slave_id (Vollzeile inkl. $) — Kollision zweier Master gleicher ID. */
+static char s_last_own_dst_slave_line[192];
+static uint32_t s_last_own_dst_slave_line_ms = 0;
+
 /** Zuletzt ein gültiges Telegramm mit SRC = Slave-ID (ACK/NAK/ERR …) — Verbindungs-Watchdog */
 static uint32_t s_last_slave_rx_ms = 0;
 static bool s_have_slave_rx_ever = false;
@@ -426,11 +433,11 @@ float rotor_rs485_get_last_position_deg(void) { return s_last_pos_ui_deg; }
 
 bool rotor_rs485_is_foreign_pc_listen_mode(void)
 {
-    /* PC-Proxy aktiv (USB->Controller->Bus): lokale Hintergrund-GETs drosseln, auch wenn
-     * PC dieselbe Master-ID wie der Controller verwendet. Sonst entstehen ACK-Cluster/Stau. */
+    /* USB-Bridge (PC steuert): lokale Hintergrund-GETs drosseln, auch wenn PC dieselbe Master-ID nutzt. */
     if (serial_bridge::get_mode() == serial_bridge::BridgeMode::PcProxyMaster) {
         return true;
     }
+    /* Reiner RS485-Mitläufer: anderer Master spricht unseren Rotor an (auch gleiche Master-ID wie wir). */
     if (s_last_foreign_master_to_slave_ms == 0) {
         return false;
     }
@@ -600,6 +607,17 @@ static bool bus_send_allowed_by_fault(void)
     return e == 0 || e == 10;
 }
 
+static bool is_recent_own_dst_slave_line(const char *line)
+{
+    if (s_last_own_dst_slave_line_ms == 0 || s_last_own_dst_slave_line[0] == '\0') {
+        return false;
+    }
+    if ((uint32_t)(millis() - s_last_own_dst_slave_line_ms) >= ROTOR_OWN_DST_SLAVE_LINE_MATCH_MS) {
+        return false;
+    }
+    return strcmp(line, s_last_own_dst_slave_line) == 0;
+}
+
 static void send_line_to(uint8_t dst, const char *cmd, const char *params_str)
 {
     if (!bus_send_allowed_by_fault()) {
@@ -611,6 +629,11 @@ static void send_line_to(uint8_t dst, const char *cmd, const char *params_str)
     format_cs_python(cs, sizeof(cs), cs_val);
     char line[192];
     snprintf(line, sizeof(line), "#%u:%u:%s:%s:%s$", (unsigned)s_master_id, (unsigned)dst, cmd, params_str, cs);
+    if ((unsigned)dst == (unsigned)s_slave_id) {
+        strncpy(s_last_own_dst_slave_line, line, sizeof(s_last_own_dst_slave_line) - 1);
+        s_last_own_dst_slave_line[sizeof(s_last_own_dst_slave_line) - 1] = '\0';
+        s_last_own_dst_slave_line_ms = millis();
+    }
     // SETPOSCC-Vorschau muss bei laufender Fremd-GETPOSDG-Flut sofort raus.
     if (strcmp(cmd, "SETPOSCC") == 0) {
         serial_bridge::hw_send_priority(reinterpret_cast<const uint8_t *>(line), strlen(line));
@@ -2353,10 +2376,16 @@ static void process_complete_line(const char *line, size_t len)
         return;
     }
 
-    /* Anderer Master spricht unseren Rotor an → Mitläufer-Modus (GET-Polling aus loop aussetzen). */
-    if (dst == (unsigned)s_slave_id && src != (unsigned)s_master_id) {
-        s_last_foreign_master_to_slave_ms = millis();
-        s_foreign_master_src_id = (uint8_t)src;
+    /* Fremder Verkehr an unseren Rotor (Slave): Mitläufer-Modus. Auch SRC = unsere Master-ID, wenn es
+     * nicht unser Echo der zuletzt gesendeten Zeile ist (zwei Geräte mit gleicher master_id am Bus). */
+    if (dst == (unsigned)s_slave_id && src != (unsigned)s_slave_id) {
+        const bool other_master = (src != (unsigned)s_master_id);
+        const bool same_master_foreign =
+            (src == (unsigned)s_master_id) && !is_recent_own_dst_slave_line(line);
+        if (other_master || same_master_foreign) {
+            s_last_foreign_master_to_slave_ms = millis();
+            s_foreign_master_src_id = (uint8_t)src;
+        }
     }
 
     /* Befehl an den Slave (beliebiger Master): Start Timeout-Uhr „noch keine Slave-Antwort“ (z. B. nur PC) */
@@ -2553,6 +2582,8 @@ void rotor_rs485_init(void)
     s_next_weather_ms = millis() + 2000u;
     s_weather_phase = 0;
     s_next_motortemp_ms = millis() + 2000u;
+    s_last_own_dst_slave_line[0] = '\0';
+    s_last_own_dst_slave_line_ms = 0;
     s_setposcc_queued = false;
     s_setposdg_retry_count = 0;
     s_geterr_retry_count = 0;
@@ -2765,8 +2796,16 @@ void rotor_rs485_loop(void)
     }
 
     if (rotor_rs485_is_foreign_pc_listen_mode()) {
-        if (s_boot_test_done && !s_startup_err_known) {
-            s_startup_err_known = true;
+        /* Eigenes TEST-BOOT laeuft nicht (return vor try_boot_test). Sobald der Slave am Bus
+         * antwortet (Fremd-Master pollt), ist der Link real — Startup-GETERR-Pfad ueberspringen,
+         * sonst bleiben Meldetext „Initialisiere“ und homing_led rot trotz gruenem Ring (Ref aus ACK). */
+        if (!s_startup_err_known) {
+            if (s_boot_test_done) {
+                s_startup_err_known = true;
+            } else if (s_have_slave_rx_ever) {
+                s_boot_test_done = true;
+                s_startup_err_known = true;
+            }
         }
         return;
     }

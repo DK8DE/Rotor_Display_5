@@ -54,9 +54,10 @@ void rotor_rs485_rx_bytes(const uint8_t *data, size_t len);
 void rotor_rs485_loop(void);
 
 /**
- * True, wenn ein anderer Master (SRC ≠ rotor_rs485_set_master_id) den Rotor (DST = Slave-ID) anfragt
- * und kürzlich Traffic war — dann sendet der Controller kein eigenes GET-Polling (nur Mitlesen).
- * Voraussetzung: PC/Software nutzt eine andere Master-ID als der Controller.
+ * True, wenn der Controller im Mitläufer-Modus arbeiten soll: USB-PC steuert die Brücke, oder am RS485-Bus
+ * spricht kürzlich ein anderer Master den Rotor (DST = Slave-ID) an — auch bei gleicher Master-ID wie der
+ * Controller, sobald die empfangene Zeile nicht unser Echo der zuletzt gesendeten Slave-Unicast-Zeile ist.
+ * Dann kein eigenes GET/TEST-Polling; SETPOSCC (Encoder-Vorschau) geht weiter per RS485 (hw_send_priority).
  */
 bool rotor_rs485_is_foreign_pc_listen_mode(void);
 

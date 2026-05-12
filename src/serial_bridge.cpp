@@ -203,6 +203,12 @@ static void wait_bus_idle(uint32_t min_idle_us, uint32_t cap_ms)
         if (has_rx) {
             delayMicroseconds(120);
             taskYIELD();
+            /* Fremd-Master pollt ohne Pause: UART nie leer → ohne Deadline-Abbruch wuerde
+             * SETPOSCC (hw_send_priority) nie den TX erreichen. */
+            if ((int32_t)(millis() - deadline_ms) >= 0) {
+                delayMicroseconds(min_idle_us);
+                return;
+            }
             continue;
         }
 
@@ -395,7 +401,8 @@ static void task_usb_rx(void *)
 
 void hw_send(const uint8_t *data, size_t len)
 {
-    if (s_mode == BridgeMode::PcProxyMaster && is_controller_poll_frame(data, len)) {
+    /* Mitläufer (USB-Proxy oder Fremd-Master am RS485): keine eigenen GET/TEST — SETPOSCC bleibt hw_send_priority. */
+    if (rotor_rs485_is_foreign_pc_listen_mode() && is_controller_poll_frame(data, len)) {
         return;
     }
     (void)enqueue_tx_frame(data, len, 0u);
