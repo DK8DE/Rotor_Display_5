@@ -93,8 +93,9 @@ static void set_pixel_rg(float rw, uint8_t j)
     s_sig->setPixel(j, r, g, b, pwm_config_scale_led_ring_brightness(br));
 }
 
-/** Kleiner Öffnungswinkel: Gauß um Richtung — eine Haupt-LED, Nachbarn gedimmt, Drehen bleibt weich */
-static void set_direction_red_on_green(float led_pos)
+/** Kleiner Öffnungswinkel: Gauß um Richtung — eine Haupt-LED, Nachbarn gedimmt, Drehen bleibt weich.
+ * Dipol: zusätzlich gegenüberliegende Keule (LED-Position + n/2 = 180°), je LED das Maximum. */
+static void set_direction_red_on_green(float led_pos, bool dipole)
 {
     const int n = (int)s_n;
     if (n <= 0) {
@@ -104,11 +105,22 @@ static void set_direction_red_on_green(float led_pos)
     if (w < 0.0f) {
         w += (float)n;
     }
+    float w2 = fmodf(w + (float)n * 0.5f, (float)n);
+    if (w2 < 0.0f) {
+        w2 += (float)n;
+    }
     const float sigma = SIGNALS_RING_POINT_SIGMA_LED;
     const float denom = 2.0f * sigma * sigma;
     for (uint8_t j = 0; j < s_n; j++) {
         const float dist = circular_led_dist_abs(w, (int)j, n);
         float rw = expf(-(dist * dist) / denom);
+        if (dipole) {
+            const float dist2 = circular_led_dist_abs(w2, (int)j, n);
+            const float rw2 = expf(-(dist2 * dist2) / denom);
+            if (rw2 > rw) {
+                rw = rw2;
+            }
+        }
         set_pixel_rg(rw, j);
     }
 }
@@ -119,13 +131,14 @@ static void set_direction_red_on_green(float led_pos)
  * Kein „inner = half - feather“ mehr — das schnitt z. B. bei 150° (half=75°) bei 66° ab und ließ nur
  * 3 LED-Mitten (0…45°) hart rot, obwohl 150° ≈ 6,7 LED-Schritte (16 LEDs) sein sollen.
  */
-static void set_direction_sector_red_on_green(float center_deg_ui, float opening_deg)
+static void set_direction_sector_red_on_green(float center_deg_ui, float opening_deg, bool dipole)
 {
     const int n = (int)s_n;
     if (n <= 0) {
         return;
     }
     const float center = normalize_deg_for_led(center_deg_ui);
+    const float center2 = normalize_deg_for_led(center_deg_ui + 180.0f);
     const float half = opening_deg * 0.5f;
     const float half_safe = (half > 1e-4f) ? half : 1e-4f;
     const float deg_per_led = 360.0f / (float)n;
@@ -137,6 +150,15 @@ static void set_direction_sector_red_on_green(float center_deg_ui, float opening
         float rw = 0.0f;
         if (d <= limit_safe) {
             rw = cosf(1.57079633f * (d / limit_safe));
+        }
+        if (dipole) {
+            const float d2 = angle_diff_abs_wrap(center2, led_center_deg);
+            if (d2 <= limit_safe) {
+                const float rw2 = cosf(1.57079633f * (d2 / limit_safe));
+                if (rw2 > rw) {
+                    rw = rw2;
+                }
+            }
         }
         set_pixel_rg(rw, j);
     }
@@ -202,10 +224,11 @@ void signals_ring_app_loop(uint32_t now_ms)
     } else if (ref) {
         const uint8_t ant = pwm_config_get_last_antenna();
         const float opening = pwm_config_get_opening_deg((int)ant);
+        const bool dipole = pwm_config_get_antdp((int)ant) != 0;
         if (opening >= 20.0f) {
-            set_direction_sector_red_on_green(pos_deg, opening);
+            set_direction_sector_red_on_green(pos_deg, opening, dipole);
         } else {
-            set_direction_red_on_green(dir_led_pos);
+            set_direction_red_on_green(dir_led_pos, dipole);
         }
     } else {
         for (uint8_t i = 0; i < s_n; i++) {

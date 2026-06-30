@@ -117,6 +117,12 @@ bool rotor_rs485_is_remote_setpos_motion(void);
 /** Letzte Ist-Position für UI (GETPOSDG), in Grad. */
 float rotor_rs485_get_last_position_deg(void);
 
+/** Zuletzt gesendetes / gemeldetes Bus-Soll (mechanisch) — für UI-Nachführung nach Versatz-Laden. */
+float rotor_rs485_get_last_target_bus_deg(void);
+
+/** true, solange die einmalige Versatz-/Dipol-/Winkel-Boot-Leseabfrage noch läuft (auch als Mitläufer). */
+bool rotor_rs485_boot_read_in_progress(void);
+
 /**
  * SETPOSDG mit Zielgrad (0…360°), dann GETPOSDG alle 200 ms bis Ist ≈ Soll.
  * Grad werden mit zwei Nachkommastellen und Komma im Telegramm gesendet (wie Doku).

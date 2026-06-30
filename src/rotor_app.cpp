@@ -1,6 +1,7 @@
 /**
  * Verbindet EEZ-UI (ref, homing_led, grad_acc, taget_dg, actual_dg) mit rotor_rs485 — ohne Änderungen in src/ui.
- * Arc: Wert = mechanische Buslage (0..360°); Rotation = EEZ-Basis (270°) + Antennenversatz — Skala dreht beim Antennenwechsel, Zeiger bleibt zur Mechanik.
+ * Arc: Wert = mechanische Buslage (0..360°); Rotation = EEZ-Basis (270°) + Antennenversatz — Anfang = Mechanik-0°.
+ * taget/actual: logische Kompassrichtung (Bus + Versatz, bei Dipol ggf. Rückkeule).
  * Encoder-Soll in Zehntelgrad (Skalierung siehe main ENCODER_DELTA_TENTHS_PER_STEP).
  */
 
@@ -524,6 +525,8 @@ static int deg_to_arc_value(float deg)
 
 /** Zuletzt Ist vom Bus (mechanisch, vor Antennenversatz) — für Umrechnung bei Antennenwechsel */
 static float s_last_bus_ist_deg = 0.0f;
+/** Dipol: aktuelle Fahrt nutzt Rückkeule (mechanisch +180° zur logischen Strahlrichtung). */
+static bool s_dipole_back_lobe_active = false;
 
 static float norm360_add(float a)
 {
@@ -532,11 +535,6 @@ static float norm360_add(float a)
         x += 360.0f;
     }
     return x;
-}
-
-static float active_antenna_offset_deg(void)
-{
-    return pwm_config_get_antoff_deg(static_cast<int>(pwm_config_get_last_antenna()));
 }
 
 /** Kompass = Buslage + Versatz der angegebenen Antenne (1…3) — beim Wechsel: Strahl mit alter Antenne. */
@@ -577,23 +575,69 @@ static float display_to_bus(float display_deg)
     return display_to_bus_for_idx(display_deg, static_cast<int>(pwm_config_get_last_antenna()));
 }
 
+static float min_angle_diff_display(float a_deg, float b_deg)
+{
+    float d = std::fabs(a_deg - b_deg);
+    if (d > 180.0f) {
+        d = 360.0f - d;
+    }
+    return d;
+}
+
+struct MotionBusResolve {
+    float bus_cmd;
+    bool use_back_lobe;
+};
+
+/** Logisches Soll → mechanischer Bus-Soll (Haupt- oder Rückkeule bei Dipol). */
+static MotionBusResolve resolve_motion_bus(float logical_deg, float current_bus, int ant_1_to_3)
+{
+    const float bus_main = display_to_bus_for_idx(logical_deg, ant_1_to_3);
+    if (!pwm_config_get_antdp(ant_1_to_3)) {
+        return {bus_main, false};
+    }
+    float logical_back = logical_deg + 180.0f;
+    if (logical_back >= 360.0f) {
+        logical_back -= 360.0f;
+    }
+    const float bus_back = display_to_bus_for_idx(logical_back, ant_1_to_3);
+    const float d_main = min_angle_diff_display(current_bus, bus_main);
+    const float d_back = min_angle_diff_display(current_bus, bus_back);
+    if (d_back < d_main) {
+        return {bus_back, true};
+    }
+    return {bus_main, false};
+}
+
+/** Mechanisches Ist → logische Anzeige (Kompass / taget / Arc). */
+static float bus_to_logical_display(float bus_mech, int ant_1_to_3)
+{
+    if (!pwm_config_get_antdp(ant_1_to_3)) {
+        return bus_to_display_for_idx(bus_mech, ant_1_to_3);
+    }
+    if (s_dipole_back_lobe_active) {
+        return bus_to_display_for_idx(norm360_add(bus_mech + 180.0f), ant_1_to_3);
+    }
+    const float logical_main = bus_to_display_for_idx(bus_mech, ant_1_to_3);
+    const float logical_back = bus_to_display_for_idx(norm360_add(bus_mech + 180.0f), ant_1_to_3);
+    if (s_encoder_adjusting || rotor_rs485_is_position_polling()) {
+        const float target = s_encoder_target_deg;
+        const float d_main = min_angle_diff_display(logical_main, target);
+        const float d_back = min_angle_diff_display(logical_back, target);
+        return (d_back < d_main) ? logical_back : logical_main;
+    }
+    return logical_main;
+}
+
 float rotor_app_get_display_direction_deg(void)
 {
-    return bus_to_display(s_last_bus_ist_deg);
+    return bus_to_logical_display(s_last_bus_ist_deg,
+                                  static_cast<int>(pwm_config_get_last_antenna()));
 }
 
-/** lv_arc_get_value → Busgrad (Arc zeigt Mechanik, nicht Anzeige-Kompass) */
-static float arc_int_value_to_bus_deg(int v)
+static int grad_acc_rotation_from_antoff(int ant_1_to_3)
 {
-    if (v >= 360) {
-        return 360.0f;
-    }
-    return static_cast<float>(v);
-}
-
-static int grad_acc_rotation_from_antoff(void)
-{
-    const float off = active_antenna_offset_deg();
+    const float off = pwm_config_get_antoff_deg(ant_1_to_3);
     long r = static_cast<long>(GRAD_ACC_BASE_ROTATION)
         + std::lround(static_cast<double>(off));
     r %= 360;
@@ -603,15 +647,28 @@ static int grad_acc_rotation_from_antoff(void)
     return static_cast<int>(r);
 }
 
-/** Arc: Ist = Buslage; Rotation = Basis + Antennenversatz (Kompass-Skala kippt mit Antenne) */
-static void grad_acc_sync_mechanical(float bus_deg_ui)
+/** lv_arc_get_value → Busgrad auf der gedrehten Arc-Skala. */
+static float arc_int_value_to_bus_deg(int v)
+{
+    if (v >= 360) {
+        return 360.0f;
+    }
+    return static_cast<float>(v);
+}
+
+/** Arc: mechanische Lage; bei Dipol-Rückkeule Arc-Wert +180° (logische Strahlrichtung am Zeiger). */
+static void grad_acc_sync_bus(float bus_mech_deg, int ant_1_to_3, bool dipole_back_lobe)
 {
     if (!objects.grad_acc) {
         return;
     }
+    float arc_bus = bus_mech_deg;
+    if (pwm_config_get_antdp(ant_1_to_3) && dipole_back_lobe) {
+        arc_bus = norm360_add(bus_mech_deg + 180.0f);
+    }
     s_arc_updating = true;
-    lv_arc_set_value(objects.grad_acc, deg_to_arc_value(bus_deg_ui));
-    lv_arc_set_rotation(objects.grad_acc, grad_acc_rotation_from_antoff());
+    lv_arc_set_value(objects.grad_acc, deg_to_arc_value(arc_bus));
+    lv_arc_set_rotation(objects.grad_acc, grad_acc_rotation_from_antoff(ant_1_to_3));
     s_arc_updating = false;
 }
 
@@ -710,6 +767,10 @@ static void actual_dg_set_display_text(const char *buf, bool sync_full_refr_now 
 /** RS485-Pfad darf nicht direkt lvgl_port_lock + Label setzen (WDT/Deadlock mit LVGL-Task). */
 static void on_ref_status(bool referenced)
 {
+    /* on_ref_status wird nur bei echtem Referenz-Wechsel aufgerufen (notify_ref defert nur bei Änderung).
+     * Nach dem Homing (unref→ref) ist keine Dipol-Fahrt aktiv → Rückkeulen-Flag löschen, sonst zeigt
+     * die Anzeige die Homing-Position +180° (z. B. 90°→270° bei 90°-Versatz). */
+    s_dipole_back_lobe_active = false;
     if (!referenced) {
         s_encoder_adjusting = false;
         s_encoder_goto_retry_pending = false;
@@ -781,7 +842,8 @@ static void on_target_deg(float bus_deg)
     /* Kurz nach Antennenwechsel: Slave meldet noch den alten Bus-Soll — mit neuem Versatz falsch in Anzeige;
      * erst Echo zum neuen SETPOSDG (gleicher Anzeige-Soll wie s_encoder_tenths) anwenden. */
     if (millis() < s_taget_ignore_bus_target_until_ms) {
-        const float disp_probe = bus_to_display(bus_deg);
+        const int ant_probe = static_cast<int>(pwm_config_get_last_antenna());
+        const float disp_probe = bus_to_logical_display(bus_deg, ant_probe);
         const int incoming_t = wrap_tenths_deg(static_cast<int>(
             std::floor(static_cast<double>(disp_probe) * 10.0 + 1e-4)));
         int d = incoming_t - s_encoder_tenths;
@@ -795,7 +857,8 @@ static void on_target_deg(float bus_deg)
             return;
         }
     }
-    const float disp = bus_to_display(bus_deg);
+    const int ant = static_cast<int>(pwm_config_get_last_antenna());
+    const float disp = bus_to_logical_display(bus_deg, ant);
     /* Nicht um 0,1° zurückspringen: gleicher physikalischer Soll, nur floor/Float unterhalb der Session-Zehntel. */
     if (!rotor_rs485_is_remote_setpos_motion() &&
         bus_target_matches_session_tenth_noise(disp, s_encoder_tenths)) {
@@ -850,17 +913,17 @@ static void on_position_deg(float bus_deg_ui)
     s_last_bus_ist_deg = bus_deg_ui;
     lvgl_port_lock(-1);
     char buf[16];
-    const float disp = bus_to_display(bus_deg_ui);
+    const int ant = static_cast<int>(pwm_config_get_last_antenna());
+    const float disp = bus_to_logical_display(bus_deg_ui, ant);
     fmt_de(buf, sizeof(buf), disp);
     if (objects.actual_dg) {
         actual_dg_set_display_text(buf, false);
     }
-    /* Während Positionsfahrt: Arc immer aus Ist (GETPOSDG), auch wenn Encoder-Flag noch gesetzt ist
-     * (Beschleunigungs-Detents / Überlappung) — sonst „steht“ der Zeiger, actual läuft weiter. */
+    /* Während Positionsfahrt: Arc aus Ist — auch wenn Encoder-Flag noch gesetzt ist. */
     if (!s_arc_dragging &&
         (!s_encoder_adjusting || rotor_rs485_is_position_polling()) &&
         objects.grad_acc) {
-        grad_acc_sync_mechanical(bus_deg_ui);
+        grad_acc_sync_bus(bus_deg_ui, ant, s_dipole_back_lobe_active);
     }
     lvgl_port_unlock();
 }
@@ -903,8 +966,8 @@ static void on_arc(lv_event_t *e)
         }
         s_arc_moved_this_press = true;
         const int v = lv_arc_get_value(arc);
-        const float bus_deg = arc_int_value_to_bus_deg(v);
-        const float disp = bus_to_display(bus_deg);
+        const int ant = static_cast<int>(pwm_config_get_last_antenna());
+        const float disp = bus_to_display_for_idx(arc_int_value_to_bus_deg(v), ant);
         char buf[16];
         fmt_taget_from_display_deg(buf, sizeof(buf), disp);
         taget_dg_set_display_text(buf);
@@ -927,15 +990,20 @@ static void on_arc(lv_event_t *e)
         if (!moved) {
             return;
         }
-        const float bus_tgt = arc_int_value_to_bus_deg(target_v);
+        const int ant = static_cast<int>(pwm_config_get_last_antenna());
+        const float logical_tgt =
+            bus_to_display_for_idx(arc_int_value_to_bus_deg(target_v), ant);
         char buf[16];
-        fmt_taget_from_display_deg(buf, sizeof(buf), bus_to_display(bus_tgt));
+        fmt_taget_from_display_deg(buf, sizeof(buf), logical_tgt);
         taget_dg_set_display_text(buf);
-        /* Arc zeigt Ist (mitfahren), nicht auf dem Ziel stehen bleiben */
+        s_encoder_target_deg = logical_tgt;
         if (objects.grad_acc) {
-            grad_acc_sync_mechanical(s_last_bus_ist_deg);
+            grad_acc_sync_bus(s_last_bus_ist_deg, ant, s_dipole_back_lobe_active);
         }
-        (void)rotor_rs485_goto_degrees(bus_tgt);
+        const MotionBusResolve r = resolve_motion_bus(
+            logical_tgt, s_last_bus_ist_deg, ant);
+        s_dipole_back_lobe_active = r.use_back_lobe;
+        (void)rotor_rs485_goto_degrees(r.bus_cmd);
     }
 }
 
@@ -1011,12 +1079,16 @@ static bool encoder_apply_goto(float target_deg)
     if (!rotor_rs485_is_referenced()) {
         return false;
     }
+    const int ant = static_cast<int>(pwm_config_get_last_antenna());
+    const MotionBusResolve r = resolve_motion_bus(
+        target_deg, s_last_bus_ist_deg, ant);
     lvgl_port_lock(-1);
     if (ENCODER_MOVES_ARC && objects.grad_acc) {
-        grad_acc_sync_mechanical(s_last_bus_ist_deg);
+        grad_acc_sync_bus(r.bus_cmd, ant, r.use_back_lobe);
     }
     lvgl_port_unlock();
-    return rotor_rs485_goto_degrees(display_to_bus(target_deg));
+    s_dipole_back_lobe_active = r.use_back_lobe;
+    return rotor_rs485_goto_degrees(r.bus_cmd);
 }
 
 extern "C" void rotor_app_encoder_step(int delta_tenths)
@@ -1079,11 +1151,15 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
     s_encoder_tenths = wrap_tenths_deg(s_encoder_tenths + delta_tenths);
 
     const float deg = static_cast<float>(s_encoder_tenths) / 10.0f;
+    const int ant = static_cast<int>(pwm_config_get_last_antenna());
     if (ENCODER_MOVES_ARC && objects.grad_acc) {
-        const float bus_deg = display_to_bus(deg);
-        const int arc_int = deg_to_arc_value(bus_deg);
+        const MotionBusResolve r = resolve_motion_bus(deg, s_last_bus_ist_deg, ant);
+        const int arc_int = deg_to_arc_value(
+            pwm_config_get_antdp(ant) && r.use_back_lobe
+                ? norm360_add(r.bus_cmd + 180.0f)
+                : r.bus_cmd);
         if (arc_int != s_encoder_arc_int_cached) {
-            grad_acc_sync_mechanical(bus_deg);
+            grad_acc_sync_bus(r.bus_cmd, ant, r.use_back_lobe);
             s_encoder_arc_int_cached = arc_int;
         }
     }
@@ -1124,6 +1200,9 @@ extern "C" void rotor_app_antenna_offset_changed(void)
     s_encoder_retry_deadline_ms = 0;
     s_encoder_idle_deadline_ms = 0;
     on_position_deg(s_last_bus_ist_deg);
+    if (rotor_rs485_is_referenced()) {
+        on_target_deg(rotor_rs485_get_last_target_bus_deg());
+    }
 }
 
 /**
@@ -1144,8 +1223,8 @@ static void rotor_app_antenna_switch_from_ui(uint8_t prev_antenna_1_to_3, bool s
     }
 
     /* concha 0: Soll = Ist in Anzeige für die neue Antenne (kein Strahl beibehalten). */
-    const float beam_compass =
-        bus_to_display_for_idx(s_last_bus_ist_deg, static_cast<int>(prev_antenna_1_to_3));
+    const float beam_compass = bus_to_logical_display(
+        s_last_bus_ist_deg, static_cast<int>(prev_antenna_1_to_3));
     const float disp_ist_new_ant =
         bus_to_display_for_idx(s_last_bus_ist_deg, static_cast<int>(now_ant));
     const uint8_t concha = pwm_config_get_concha();
@@ -1189,8 +1268,10 @@ static void rotor_app_antenna_switch_from_ui(uint8_t prev_antenna_1_to_3, bool s
         return;
     }
     if (!encoder_apply_goto(beam_compass)) {
-        rotor_rs485_hw_snap_retarget_request(
-            display_to_bus_for_idx(beam_compass, static_cast<int>(now_ant)));
+        const MotionBusResolve r = resolve_motion_bus(
+            beam_compass, s_last_bus_ist_deg, static_cast<int>(now_ant));
+        s_dipole_back_lobe_active = r.use_back_lobe;
+        rotor_rs485_hw_snap_retarget_request(r.bus_cmd);
     }
 }
 
@@ -1332,7 +1413,8 @@ extern "C" void rotor_app_snap_target_to_deg(float bus_deg)
     s_encoder_goto_retry_pending = false;
     s_encoder_retry_deadline_ms = 0;
     s_encoder_idle_deadline_ms = 0;
-    const float disp = bus_to_display(bus_deg);
+    const int ant = static_cast<int>(pwm_config_get_last_antenna());
+    const float disp = bus_to_logical_display(bus_deg, ant);
     s_encoder_target_deg = disp;
     s_encoder_tenths = wrap_tenths_deg(
         static_cast<int>(std::floor(static_cast<double>(disp) * 10.0 + 1e-4)));
@@ -1342,7 +1424,9 @@ extern "C" void rotor_app_snap_target_to_deg(float bus_deg)
     fmt_taget_from_display_deg(buf, sizeof(buf), disp);
     taget_dg_set_display_text(buf);
     if (ENCODER_MOVES_ARC && objects.grad_acc) {
-        grad_acc_sync_mechanical(bus_deg);
+        const MotionBusResolve r = resolve_motion_bus(disp, s_last_bus_ist_deg, ant);
+        s_dipole_back_lobe_active = r.use_back_lobe;
+        grad_acc_sync_bus(r.bus_cmd, ant, r.use_back_lobe);
     }
     lvgl_port_unlock();
 }

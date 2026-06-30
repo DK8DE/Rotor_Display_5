@@ -193,6 +193,34 @@ static bool is_controller_poll_frame(const uint8_t *data, size_t len)
     return remaining >= 4 && memcmp(data + cmd_start, "TEST", 4) == 0;
 }
 
+/** Einmalige Boot-Leseabfragen (Versatz/Dipol/Oeffnungswinkel): GETANTOFF, GETANTDP, GETANGLE. */
+static bool is_antenna_boot_read_frame(const uint8_t *data, size_t len)
+{
+    if (!data || len < 8 || data[0] != '#') {
+        return false;
+    }
+    int colon_count = 0;
+    size_t cmd_start = 0;
+    for (size_t i = 1; i < len; ++i) {
+        if (data[i] == ':') {
+            colon_count++;
+            if (colon_count == 2) {
+                cmd_start = i + 1;
+                break;
+            }
+        } else if (data[i] == '$') {
+            return false;
+        }
+    }
+    if (cmd_start == 0 || cmd_start >= len) {
+        return false;
+    }
+    const size_t remaining = len - cmd_start;
+    return (remaining >= 9 && memcmp(data + cmd_start, "GETANTOFF", 9) == 0) ||
+           (remaining >= 8 && memcmp(data + cmd_start, "GETANTDP", 8) == 0) ||
+           (remaining >= 8 && memcmp(data + cmd_start, "GETANGLE", 8) == 0);
+}
+
 static void wait_bus_idle(uint32_t min_idle_us, uint32_t cap_ms)
 {
     const uint32_t deadline_ms = millis() + cap_ms;
@@ -403,7 +431,11 @@ void hw_send(const uint8_t *data, size_t len)
 {
     /* Mitläufer (USB-Proxy oder Fremd-Master am RS485): keine eigenen GET/TEST — SETPOSCC bleibt hw_send_priority. */
     if (rotor_rs485_is_foreign_pc_listen_mode() && is_controller_poll_frame(data, len)) {
-        return;
+        /* Ausnahme: einmalige Versatz-/Dipol-/Winkel-Boot-Reads müssen auch als Mitläufer auf den Bus,
+         * sonst kennt der Controller die Antennenversätze nie (stehen nur im Rotor-RAM). */
+        if (!(rotor_rs485_boot_read_in_progress() && is_antenna_boot_read_frame(data, len))) {
+            return;
+        }
     }
     (void)enqueue_tx_frame(data, len, 0u);
 }

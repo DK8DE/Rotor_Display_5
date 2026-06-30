@@ -46,6 +46,10 @@ void pwm_config_set_antoff_deg(int idx, float deg);
 float pwm_config_get_opening_deg(int idx);
 void pwm_config_set_opening_deg(int idx, float deg);
 
+/** Dipol-Flag (Rotor GETANTDPn / SETANTDPn): 1 = zweite Keule ±180°, idx 1…3 — nur vom Rotor, nicht config.json */
+uint8_t pwm_config_get_antdp(int idx);
+void pwm_config_set_antdp(int idx, uint8_t v_0_or_1);
+
 /** UI-Touch-Pieps (Signals/ATtiny): Frequenz Hz (200…4000), Lautstärke 0…50 */
 uint16_t pwm_config_get_touch_beep_freq_hz(void);
 void pwm_config_set_touch_beep_freq_hz(uint16_t hz);

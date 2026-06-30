@@ -36,6 +36,7 @@ static char s_ant_label[3][48];
 static uint8_t s_last_antenna = 1;
 static float s_antoff_deg[3] = { 0.0f, 0.0f, 0.0f };
 static float s_opening_deg[3] = { 0.0f, 0.0f, 0.0f };
+static uint8_t s_antdp[3] = { 0, 0, 0 };
 
 static int parse_int_after_key(const char *json, const char *key)
 {
@@ -365,6 +366,22 @@ void pwm_config_set_opening_deg(int idx, float deg)
         deg = 360.0f;
     }
     s_opening_deg[idx - 1] = deg;
+}
+
+uint8_t pwm_config_get_antdp(int idx)
+{
+    if (idx < 1 || idx > 3) {
+        return 0;
+    }
+    return s_antdp[idx - 1] ? 1u : 0u;
+}
+
+void pwm_config_set_antdp(int idx, uint8_t v_0_or_1)
+{
+    if (idx < 1 || idx > 3) {
+        return;
+    }
+    s_antdp[idx - 1] = (v_0_or_1 != 0) ? 1u : 0u;
 }
 
 uint16_t pwm_config_get_touch_beep_freq_hz(void)
