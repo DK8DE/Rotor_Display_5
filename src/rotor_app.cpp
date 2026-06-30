@@ -589,7 +589,11 @@ struct MotionBusResolve {
     bool use_back_lobe;
 };
 
-/** Logisches Soll → mechanischer Bus-Soll (Haupt- oder Rückkeule bei Dipol). */
+/** Logisches Soll → mechanischer Bus-Soll (Haupt- oder Rückkeule bei Dipol).
+ * Der Rotor hat einen mechanischen Anschlag am Bus-0/360-Übergang und kann nicht darüber drehen.
+ * Die echte Fahrstrecke ist daher die LINEARE Bus-Distanz |Soll−Ist| (kein Wraparound) — sonst
+ * würde z. B. „16° über den Anschlag“ gewählt, real aber 344° (volle Drehung) statt der halben
+ * Drehung über die Rückkeule. */
 static MotionBusResolve resolve_motion_bus(float logical_deg, float current_bus, int ant_1_to_3)
 {
     const float bus_main = display_to_bus_for_idx(logical_deg, ant_1_to_3);
@@ -601,8 +605,8 @@ static MotionBusResolve resolve_motion_bus(float logical_deg, float current_bus,
         logical_back -= 360.0f;
     }
     const float bus_back = display_to_bus_for_idx(logical_back, ant_1_to_3);
-    const float d_main = min_angle_diff_display(current_bus, bus_main);
-    const float d_back = min_angle_diff_display(current_bus, bus_back);
+    const float d_main = std::fabs(current_bus - bus_main);
+    const float d_back = std::fabs(current_bus - bus_back);
     if (d_back < d_main) {
         return {bus_back, true};
     }
