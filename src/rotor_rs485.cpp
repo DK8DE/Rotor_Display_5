@@ -86,7 +86,7 @@ extern "C" void rotor_app_antenna_offset_changed(void);
 
 /** Nach erstem „angekommen“ (Toleranz): GETPOSDG noch so lange (Endlage kann noch leicht nachziehen) */
 #ifndef ROTOR_POLL_POS_GRACE_MS
-#define ROTOR_POLL_POS_GRACE_MS 600u
+#define ROTOR_POLL_POS_GRACE_MS 2000u
 #endif
 
 #ifndef ROTOR_PERIODIC_GETREF_MS
@@ -1763,8 +1763,13 @@ static void on_ack_timeout()
             send_request("SETPOSDG", p, Pending::SetPosDg);
             s_setposdg_retry_count++;
         } else {
-            /* Nach max. Retry nicht in SetPosDg-Pending haengen bleiben:
-             * sonst blockiert ein verlorenes ACK dauerhaft alle weiteren Encoder-SETPOSDG. */
+            /* Nach max. Retry Pending aufgeben — Watchdog-Uhr neu starten:
+             * Wenn pending auf None wechselt, fällt conn_timeout_ms von
+             * ROTOR_CONN_LOST_TIMEOUT_SETPOSDG_MS auf ROTOR_CONN_LOST_TIMEOUT_MS.
+             * Liegt s_last_slave_rx_ms schon ~2400 ms zurück (= SETPOSDG-Retry-Dauer),
+             * löst der Watchdog sonst innerhalb von ~400 ms Fehler 10 aus, obwohl
+             * der Bus weiter aktiv ist (der Slave fährt noch). */
+            s_last_slave_rx_ms = millis();
             clear_pending();
             s_poll_pos = false;
             s_pos_grace_end_ms = 0;

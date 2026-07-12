@@ -56,17 +56,6 @@ static void signals_play_boot_welcome()
         delay(notes[i].ms + 35);
     }
     g_signals.stopTone();
-    delay(120);
-
-    /* Einmal blau im Kreis (wie Demo-Lauflicht, nur B=255) */
-    g_signals.setAutoShow(false);
-    g_signals.clear();
-    for (uint8_t i = 0; i < SIGNALS_NUM_LEDS; i++) {
-        g_signals.clear();
-        g_signals.setPixel(i, 0, 0, 255, pwm_config_scale_led_ring_brightness(100));
-        g_signals.show();
-        delay(95);
-    }
     /* Ring-App arbeitet mit AutoShow=false + explizitem show(); true verursacht sichtbares Flackern,
      * weil einzelne setPixel-Kommandos sofort angezeigt werden. */
     g_signals.setAutoShow(false);

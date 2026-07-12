@@ -1091,7 +1091,9 @@ static bool encoder_apply_goto(float target_deg)
     const MotionBusResolve r = resolve_motion_bus(
         target_deg, s_last_bus_ist_deg, ant);
     lvgl_port_lock(-1);
-    if (ENCODER_MOVES_ARC && objects.grad_acc) {
+    /* Während laufender Positionsfahrt: Arc nicht auf neues Ziel springen — on_position_deg führt nach Ist.
+     * Sonst zuckt der Arc kurz zum neuen Encoder-Ziel und wird beim nächsten GETPOSDG-ACK zurückgerissen. */
+    if (ENCODER_MOVES_ARC && objects.grad_acc && !rotor_rs485_is_position_polling()) {
         grad_acc_sync_bus(r.bus_cmd, ant, r.use_back_lobe);
     }
     lvgl_port_unlock();
@@ -1158,7 +1160,11 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
 
     const float deg = static_cast<float>(s_encoder_tenths) / 10.0f;
     const int ant = static_cast<int>(pwm_config_get_last_antenna());
-    if (ENCODER_MOVES_ARC && objects.grad_acc) {
+    /* Während Positionsfahrt: Arc bleibt auf Ist-Position (on_position_deg führt nach).
+     * Encoder-Eingriff während Fahrt würde Arc zum neuen Soll springen lassen,
+     * beim nächsten GETPOSDG-ACK sofort zurückfallen → Flackern.
+     * Bei stehendem Rotor: Arc folgt dem Encoder-Soll wie bisher. */
+    if (ENCODER_MOVES_ARC && objects.grad_acc && !rotor_rs485_is_position_polling()) {
         const MotionBusResolve r = resolve_motion_bus(deg, s_last_bus_ist_deg, ant);
         const int arc_int = deg_to_arc_value(
             pwm_config_get_antdp(ant) && r.use_back_lobe
