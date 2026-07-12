@@ -112,14 +112,14 @@ extern "C" void rotor_app_antenna_offset_changed(void);
 #define ROTOR_OWN_DST_SLAVE_LINE_MATCH_MS 280u
 #endif
 
-/** Referenz + Betrieb: keine Antwort vom Rotor (Slave) seit so lang → Fehler 10 Verbindungstimeout
- * (gilt auch wenn nur der PC fragt und der Controller selbst nicht sendet). */
+/** Referenz + Betrieb: keine Antwort vom Rotor (Slave) seit so lang → Fehler 10 Verbindungstimeout.
+ * Der Controller pollt regelmäßig; Timeout daher bewusst deutlich unter 5 s halten. */
 #ifndef ROTOR_CONN_LOST_TIMEOUT_MS
-#define ROTOR_CONN_LOST_TIMEOUT_MS 5500u
+#define ROTOR_CONN_LOST_TIMEOUT_MS 2800u
 #endif
-/** Bei ausstehendem SETPOSDG ACK darf der Link-Watchdog nicht sofort auf Fehler 10 springen. */
+/** Bei ausstehendem SETPOSDG ACK etwas mehr Luft, aber weiterhin deutlich unter 5 s. */
 #ifndef ROTOR_CONN_LOST_TIMEOUT_SETPOSDG_MS
-#define ROTOR_CONN_LOST_TIMEOUT_SETPOSDG_MS 5000u
+#define ROTOR_CONN_LOST_TIMEOUT_SETPOSDG_MS 3200u
 #endif
 
 /** Abstand zwischen GETANEMO / GETTEMPA / GETWINDDIR (zyklisch); jede Größe alle 3 s */
@@ -2333,7 +2333,10 @@ static bool parse_ack_getposdg(const char *line)
         }
     }
 
-    if (for_us && s_align_target_after_pos_read) {
+    /* Start-/Homing-Sync: Soll auf ersten frischen Ist-Wert legen.
+     * Nicht an for_us koppeln — Ist wird aus demselben ACK bereits übernommen, sonst bleibt taget
+     * gelegentlich auf 0/360 und der Encoder startet vom falschen Bezug. */
+    if (s_align_target_after_pos_read) {
         s_align_target_after_pos_read = false;
         s_target_deg = deg;
         notify_target(deg_ui);

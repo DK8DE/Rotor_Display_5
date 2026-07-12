@@ -24,10 +24,72 @@
 #define SIGNALS_RING_POINT_SIGMA_LED 0.62f
 #endif
 
+#ifndef SIGNALS_RING_MAX_LEDS
+#define SIGNALS_RING_MAX_LEDS 32u
+#endif
+
+/** Voll-Refresh-Intervall: sendet auch ohne Änderung einmal den kompletten Frame (Selbstheilung,
+ * da RX = -1 keine Rückmeldung liefert und einzelne Bytes verloren gehen könnten). */
+#ifndef SIGNALS_RING_HEARTBEAT_MS
+#define SIGNALS_RING_HEARTBEAT_MS 2000u
+#endif
+
 static Signals *s_sig = nullptr;
 static uint8_t s_n = 16;
 static uint32_t s_last_draw_ms = 0;
 static uint32_t s_pause_until_ms = 0;
+
+/* Frame-Puffer: erst komplett aufbauen, dann nur geänderte Pixel senden — sonst flutet der 45-ms-Redraw
+ * (16×"P"+"W" ≈ 20 ms @115200) den TX-only-ATtiny und lässt LED 0 (erste in der Kette) glitchen. */
+static uint8_t s_cur_r[SIGNALS_RING_MAX_LEDS];
+static uint8_t s_cur_g[SIGNALS_RING_MAX_LEDS];
+static uint8_t s_cur_b[SIGNALS_RING_MAX_LEDS];
+static uint8_t s_cur_br[SIGNALS_RING_MAX_LEDS];
+static uint8_t s_last_r[SIGNALS_RING_MAX_LEDS];
+static uint8_t s_last_g[SIGNALS_RING_MAX_LEDS];
+static uint8_t s_last_b[SIGNALS_RING_MAX_LEDS];
+static uint8_t s_last_br[SIGNALS_RING_MAX_LEDS];
+static bool s_frame_valid = false;
+static uint32_t s_last_full_ms = 0;
+
+static void frame_set(uint8_t j, uint8_t r, uint8_t g, uint8_t b, uint8_t br)
+{
+    if (j >= SIGNALS_RING_MAX_LEDS) {
+        return;
+    }
+    s_cur_r[j] = r;
+    s_cur_g[j] = g;
+    s_cur_b[j] = b;
+    s_cur_br[j] = br;
+}
+
+/** Aufgebauten Frame senden: nur geänderte Pixel; Heartbeat erzwingt kompletten Frame. */
+static void frame_flush(uint32_t now_ms)
+{
+    const bool force = !s_frame_valid ||
+                       (uint32_t)(now_ms - s_last_full_ms) >= SIGNALS_RING_HEARTBEAT_MS;
+    bool any = false;
+    for (uint8_t j = 0; j < s_n && j < SIGNALS_RING_MAX_LEDS; j++) {
+        const bool diff = !s_frame_valid || s_cur_r[j] != s_last_r[j] ||
+                          s_cur_g[j] != s_last_g[j] || s_cur_b[j] != s_last_b[j] ||
+                          s_cur_br[j] != s_last_br[j];
+        if (force || diff) {
+            s_sig->setPixel(j, s_cur_r[j], s_cur_g[j], s_cur_b[j], s_cur_br[j]);
+            s_last_r[j] = s_cur_r[j];
+            s_last_g[j] = s_cur_g[j];
+            s_last_b[j] = s_cur_b[j];
+            s_last_br[j] = s_cur_br[j];
+            any = true;
+        }
+    }
+    if (any) {
+        s_sig->show();
+    }
+    if (force) {
+        s_last_full_ms = now_ms;
+    }
+    s_frame_valid = true;
+}
 
 static float normalize_deg_for_led(float deg)
 {
@@ -90,7 +152,7 @@ static void set_pixel_rg(float rw, uint8_t j)
     const uint8_t g = (uint8_t)lroundf(200.0f * gw);
     const uint8_t b = 0;
     const uint8_t br = (uint8_t)lroundf(90.0f + 15.0f * rw);
-    s_sig->setPixel(j, r, g, b, pwm_config_scale_led_ring_brightness(br));
+    frame_set(j, r, g, b, pwm_config_scale_led_ring_brightness(br));
 }
 
 /** Kleiner Öffnungswinkel: Gauß um Richtung — eine Haupt-LED, Nachbarn gedimmt, Drehen bleibt weich.
@@ -170,6 +232,8 @@ void signals_ring_app_init(Signals *signals, uint8_t num_leds)
     s_n = num_leds ? num_leds : 16;
     s_last_draw_ms = 0;
     s_pause_until_ms = 0;
+    s_frame_valid = false;
+    s_last_full_ms = 0;
     if (s_sig) {
         s_sig->setAutoShow(false);
     }
@@ -199,9 +263,9 @@ void signals_ring_app_loop(uint32_t now_ms)
 
     if (rotor_error_app_is_fault_ring_red()) {
         for (uint8_t i = 0; i < s_n; i++) {
-            s_sig->setPixel(i, 255, 0, 0, pwm_config_scale_led_ring_brightness(100));
+            frame_set(i, 255, 0, 0, pwm_config_scale_led_ring_brightness(100));
         }
-        s_sig->show();
+        frame_flush(now_ms);
         return;
     }
 
@@ -216,9 +280,9 @@ void signals_ring_app_loop(uint32_t now_ms)
         for (uint8_t i = 0; i < s_n; i++) {
             const bool on = (i == (uint8_t)phase) || (i == (uint8_t)((phase + 1u) % s_n));
             if (on) {
-                s_sig->setPixel(i, 255, 80, 0, pwm_config_scale_led_ring_brightness(100));
+                frame_set(i, 255, 80, 0, pwm_config_scale_led_ring_brightness(100));
             } else {
-                s_sig->setPixel(i, 20, 5, 0, pwm_config_scale_led_ring_brightness(25));
+                frame_set(i, 20, 5, 0, pwm_config_scale_led_ring_brightness(25));
             }
         }
     } else if (ref) {
@@ -232,9 +296,9 @@ void signals_ring_app_loop(uint32_t now_ms)
         }
     } else {
         for (uint8_t i = 0; i < s_n; i++) {
-            s_sig->setPixel(i, 80, 25, 0, pwm_config_scale_led_ring_brightness(40));
+            frame_set(i, 80, 25, 0, pwm_config_scale_led_ring_brightness(40));
         }
     }
 
-    s_sig->show();
+    frame_flush(now_ms);
 }

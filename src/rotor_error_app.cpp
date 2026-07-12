@@ -93,7 +93,9 @@ static void apply_meldetext(void)
         apply_fault_meldetext_alternate(millis());
         return;
     }
-    if (!rotor_rs485_is_startup_error_checked()) {
+    /* Beim parallelen Start (Display sofort sichtbar) ist der GETREF-Boot ggf. noch nicht durch.
+     * Bis Boot-Abschluss keine "Nicht referenziert"-Meldung anzeigen. */
+    if (!rotor_rs485_is_boot_done() || !rotor_rs485_is_startup_error_checked()) {
         lv_textarea_set_text(objects.meldetext, "Initialisiere");
         return;
     }

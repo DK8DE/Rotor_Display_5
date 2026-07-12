@@ -462,6 +462,13 @@ static int wrap_tenths_deg(int t)
     return t;
 }
 
+/** Grad -> Zehntelgrad robust runden (kein floor-Bias bei 0,1°-Richtungswechseln). */
+static int deg_to_tenths_rounded(float deg)
+{
+    const int t = static_cast<int>(std::lround(static_cast<double>(deg) * 10.0));
+    return wrap_tenths_deg(t);
+}
+
 /**
  * Soll aus taget_dg — ohne strtof: 273,7 bzw. 273.7 exakt als Zehntel 2737 (kein Float-Rundungsfehler
  * bei .2/.7, der sonst einen Zehntelschritt beim Session-Start frisst).
@@ -848,8 +855,7 @@ static void on_target_deg(float bus_deg)
     if (millis() < s_taget_ignore_bus_target_until_ms) {
         const int ant_probe = static_cast<int>(pwm_config_get_last_antenna());
         const float disp_probe = bus_to_logical_display(bus_deg, ant_probe);
-        const int incoming_t = wrap_tenths_deg(static_cast<int>(
-            std::floor(static_cast<double>(disp_probe) * 10.0 + 1e-4)));
+        const int incoming_t = deg_to_tenths_rounded(disp_probe);
         int d = incoming_t - s_encoder_tenths;
         if (d > 1800) {
             d -= 3600;
@@ -872,8 +878,7 @@ static void on_target_deg(float bus_deg)
      * (Rundung/Slave noch nicht nachgezogen). Früher nur 900 ms Schutz → danach sprang taget zurück,
      * SETPOSDG lief mit veraltetem s_encoder_target_deg / gar kein sinnvoller Versand. Mehrere Zehntel
      * auf einmal: d != -1, kein Konflikt. */
-    const int bus_t = wrap_tenths_deg(
-        static_cast<int>(std::floor(static_cast<double>(disp) * 10.0 + 1e-4)));
+    const int bus_t = deg_to_tenths_rounded(disp);
     {
         int d = bus_t - s_encoder_tenths;
         if (d > 1800) {
@@ -892,8 +897,7 @@ static void on_target_deg(float bus_deg)
     /* Gleiche Zehntel wie fmt_de/Encoder-Session — sonst zeigt taget_dg X, intern bleibt Y,
      * nächster Encoder-Tick parst X und „verschluckt“ einen Schritt / doppelter Sprung. */
     s_encoder_target_deg = disp;
-    s_encoder_tenths = wrap_tenths_deg(
-        static_cast<int>(std::floor(static_cast<double>(disp) * 10.0 + 1e-4)));
+    s_encoder_tenths = deg_to_tenths_rounded(disp);
 
     lvgl_port_lock(-1);
     char buf[16];
@@ -1145,9 +1149,7 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
         if (parse_taget_text_to_tenths(&parsed)) {
             s_encoder_tenths = parsed;
         } else {
-            const int t = static_cast<int>(
-                std::floor(static_cast<double>(s_encoder_target_deg) * 10.0 + 1e-4));
-            s_encoder_tenths = wrap_tenths_deg(t);
+            s_encoder_tenths = deg_to_tenths_rounded(s_encoder_target_deg);
         }
     }
     s_encoder_adjusting = true;
@@ -1205,7 +1207,10 @@ extern "C" void rotor_app_antenna_offset_changed(void)
     s_encoder_idle_deadline_ms = 0;
     on_position_deg(s_last_bus_ist_deg);
     if (rotor_rs485_is_referenced()) {
-        on_target_deg(rotor_rs485_get_last_target_bus_deg());
+        /* Nach Boot (GETANTOFF/GETANTDP) ist s_goto_commanded_deg oft noch 0.
+         * Soll muss hier auf dem aktuellen Ist starten, damit Encoder von der
+         * realen Position zählt und nicht von 0/360. */
+        on_target_deg(s_last_bus_ist_deg);
     }
 }
 
@@ -1235,8 +1240,7 @@ static void rotor_app_antenna_switch_from_ui(uint8_t prev_antenna_1_to_3, bool s
     const float soll_display = (concha == 0) ? disp_ist_new_ant : beam_compass;
 
     s_encoder_target_deg = soll_display;
-    s_encoder_tenths = wrap_tenths_deg(
-        static_cast<int>(std::floor(static_cast<double>(soll_display) * 10.0 + 1e-4)));
+    s_encoder_tenths = deg_to_tenths_rounded(soll_display);
 
     on_position_deg(s_last_bus_ist_deg);
 
@@ -1420,8 +1424,7 @@ extern "C" void rotor_app_snap_target_to_deg(float bus_deg)
     const int ant = static_cast<int>(pwm_config_get_last_antenna());
     const float disp = bus_to_logical_display(bus_deg, ant);
     s_encoder_target_deg = disp;
-    s_encoder_tenths = wrap_tenths_deg(
-        static_cast<int>(std::floor(static_cast<double>(disp) * 10.0 + 1e-4)));
+    s_encoder_tenths = deg_to_tenths_rounded(disp);
 
     lvgl_port_lock(-1);
     char buf[16];

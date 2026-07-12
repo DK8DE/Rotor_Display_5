@@ -28,6 +28,8 @@ static constexpr uint32_t SIGNALS_BAUD = 115200;
 static constexpr uint8_t SIGNALS_NUM_LEDS = 16;
 
 static Signals g_signals(Serial1);
+static volatile bool s_boot_welcome_active = false;
+static TaskHandle_t s_boot_welcome_task = nullptr;
 
 /** Kurze Boot-Melodie + einmal blaues Kreislauflicht (nur beim Start). */
 static void signals_play_boot_welcome()
@@ -65,8 +67,42 @@ static void signals_play_boot_welcome()
         g_signals.show();
         delay(95);
     }
-    g_signals.setAutoShow(true);
+    /* Ring-App arbeitet mit AutoShow=false + explizitem show(); true verursacht sichtbares Flackern,
+     * weil einzelne setPixel-Kommandos sofort angezeigt werden. */
+    g_signals.setAutoShow(false);
     g_signals.clear();
+    g_signals.show();
+}
+
+static void signals_boot_welcome_task(void *arg)
+{
+    (void)arg;
+    signals_play_boot_welcome();
+    s_boot_welcome_active = false;
+    s_boot_welcome_task = nullptr;
+    vTaskDelete(nullptr);
+}
+
+/** Startet Boot-Melodie/-Kreiseln ohne setup() zu blockieren (Display/UI laufen parallel an). */
+static void signals_start_boot_welcome_async()
+{
+    if (s_boot_welcome_task) {
+        return;
+    }
+    s_boot_welcome_active = true;
+    BaseType_t ok = xTaskCreatePinnedToCore(signals_boot_welcome_task,
+                                            "signals_boot",
+                                            4096,
+                                            nullptr,
+                                            2,
+                                            &s_boot_welcome_task,
+                                            1);
+    if (ok != pdPASS) {
+        /* Fallback: nie ohne Boot-Sequenz starten, auch wenn Task-Erzeugung fehlschlägt. */
+        signals_play_boot_welcome();
+        s_boot_welcome_active = false;
+        s_boot_welcome_task = nullptr;
+    }
 }
 
 /**
@@ -247,7 +283,7 @@ void setup()
     pwm_config_load();
 
     Serial.println("Signals boot (TX GPIO40) …");
-    signals_play_boot_welcome();
+    signals_start_boot_welcome_async();
     touch_feedback_set_signals(&g_signals);
     Serial.println("Initializing board");
     // esp_log_level_set("*", ESP_LOG_NONE);
@@ -339,5 +375,7 @@ void loop()
     rotor_rs485_loop();
     rotor_app_weather_ui_poll();
     rotor_error_app_loop(millis());
-    signals_ring_app_loop(millis());
+    if (!s_boot_welcome_active) {
+        signals_ring_app_loop(millis());
+    }
 }

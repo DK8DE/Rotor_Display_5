@@ -40,7 +40,9 @@ static constexpr size_t kIoChunkMax = 256;
 static constexpr size_t kTxQueueDepth = 64;
 static constexpr size_t kTxPriorityQueueDepth = 12;
 static constexpr size_t kUsbTxQueueDepth = 96;
-static constexpr size_t kSniffQueueDepth = 96;
+/* Sniffer darf keine RS485-Zeilen verlieren, sonst sieht rotor_rs485 keine ACKs
+ * und meldet sporadisch Verbindungstimeout trotz korrekter Busantworten. */
+static constexpr size_t kSniffQueueDepth = 192;
 
 /** Wartezeit nach letztem gesendeten Byte, bevor wieder Empfang (Bus-Freigabe). */
 static constexpr uint32_t kTurnaroundMicros = 250;
@@ -485,7 +487,8 @@ void begin()
         xTaskCreatePinnedToCore(task_usb_tx, "usb_tx", 4096, nullptr, 3, &s_task_usb_tx, 1);
     }
     if (!s_task_sniffer) {
-        xTaskCreatePinnedToCore(task_sniffer, "rs485_sniff", 4096, nullptr, 2, &s_task_sniffer, 1);
+        /* Gleiches Niveau wie USB-RX/TX: Parser darf nicht hinter den RX-Bursts zurückfallen. */
+        xTaskCreatePinnedToCore(task_sniffer, "rs485_sniff", 4096, nullptr, 4, &s_task_sniffer, 1);
     }
 }
 
