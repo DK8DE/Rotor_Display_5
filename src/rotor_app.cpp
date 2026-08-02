@@ -33,6 +33,11 @@ static bool s_arc_dragging = false;
 static bool s_arc_moved_this_press = false;
 /** lv_arc_get_value beim Drücken — falls VALUE_CHANGED ausbleibt, Loslassen trotzdem als Dreh erkennen */
 static int s_arc_value_at_press = 0;
+/** Arc-Drag: SETPOSCC-Vorschau an PC-Master (wie Encoder), max. alle 100 ms */
+static uint32_t s_arc_drag_cc_next_ms = 0;
+static float s_arc_drag_last_disp_deg = 0.0f;
+static bool s_arc_drag_cc_have_deg = false;
+static constexpr uint32_t ARC_DRAG_SETPOSCC_MS = 100u;
 static bool s_arc_updating = false;
 /** Encoder: Soll einstellen, Ist-Nachführung am Arc aus */
 static bool s_encoder_adjusting = false;
@@ -455,9 +460,12 @@ extern "C" void rotor_app_config_changed_from_bus(void)
 
 static int wrap_tenths_deg(int t)
 {
-    t %= 3600;
+    const int span_t = static_cast<int>(std::lround(
+        static_cast<double>(pwm_config_get_axis_span_deg()) * 10.0));
+    const int mod = (span_t > 0) ? span_t : 3600;
+    t %= mod;
     if (t < 0) {
-        t += 3600;
+        t += mod;
     }
     return t;
 }
@@ -487,10 +495,12 @@ static bool parse_taget_text_to_tenths(int *out_tenths)
     }
     int hi = 0;
     bool any_digit = false;
+    const int hi_limit = static_cast<int>(std::lround(
+        static_cast<double>(pwm_config_get_axis_span_deg()) * 10.0)) + 100;
     while (*p >= '0' && *p <= '9') {
         any_digit = true;
         hi = hi * 10 + (*p - '0');
-        if (hi > 4000) {
+        if (hi > hi_limit) {
             return false;
         }
         ++p;
@@ -514,13 +524,18 @@ static bool parse_taget_text_to_tenths(int *out_tenths)
 /** EEZ screens.c: lv_arc_set_rotation(grad_acc, 270) */
 static constexpr int GRAD_ACC_BASE_ROTATION = 270;
 
-/** Arc-Wert 0..360: ganze Grade; ≥359,5° (Homing 360°) → 360 */
+/** Arc-Wert 0..360: ganze Grade; bei Span>360 wird zuerst auf 0..360 gefaltet (361→1).
+ * ≥359,5° nach Faltung (Homing 360°) → 360 */
 static int deg_to_arc_value(float deg)
 {
-    if (deg >= 359.5f) {
+    float folded = fmodf(deg, 360.0f);
+    if (folded < 0.0f) {
+        folded += 360.0f;
+    }
+    if (folded >= 359.5f) {
         return 360;
     }
-    int v = static_cast<int>(deg + 0.5f);
+    int v = static_cast<int>(folded + 0.5f);
     if (v >= 360) {
         v = 0;
     }
@@ -544,17 +559,32 @@ static float norm360_add(float a)
     return x;
 }
 
+/** Addieren im wirksamen Fahrbereich (360 oder Typ-3-Span). */
+static float norm_span_add(float a)
+{
+    const float span = pwm_config_get_axis_span_deg();
+    if (span <= 360.5f) {
+        return norm360_add(a);
+    }
+    float x = fmodf(a, span);
+    if (x < 0.0f) {
+        x += span;
+    }
+    return x;
+}
+
 /** Kompass = Buslage + Versatz der angegebenen Antenne (1…3) — beim Wechsel: Strahl mit alter Antenne. */
 static float bus_to_display_for_idx(float bus_deg_ui, int ant_1_to_3)
 {
     const float off = pwm_config_get_antoff_deg(ant_1_to_3);
-    if (bus_deg_ui >= 359.5f) {
+    const float span = pwm_config_get_axis_span_deg();
+    if (span <= 360.5f && bus_deg_ui >= 359.5f) {
         if (std::fabs(static_cast<double>(off)) < 1e-6) {
             return 360.0f;
         }
-        return norm360_add(360.0f + off);
+        return norm_span_add(360.0f + off);
     }
-    return norm360_add(bus_deg_ui + off);
+    return norm_span_add(bus_deg_ui + off);
 }
 
 /** Anzeige (Kompass / Antennenrichtung) = Buslage + Versatz der aktuell gewählten Antenne */
@@ -567,13 +597,14 @@ static float bus_to_display(float bus_deg_ui)
 static float display_to_bus_for_idx(float display_deg, int ant_1_to_3)
 {
     const float off = pwm_config_get_antoff_deg(ant_1_to_3);
-    if (display_deg >= 359.5f) {
+    const float span = pwm_config_get_axis_span_deg();
+    if (span <= 360.5f && display_deg >= 359.5f) {
         if (std::fabs(static_cast<double>(off)) < 1e-6f) {
             return 360.0f;
         }
-        return norm360_add(360.0f - off);
+        return norm_span_add(360.0f - off);
     }
-    return norm360_add(display_deg - off);
+    return norm_span_add(display_deg - off);
 }
 
 /** Soll am Bus für SETPOSDG aus Anzeige-Winkel (aktuelle last_antenna) */
@@ -584,6 +615,11 @@ static float display_to_bus(float display_deg)
 
 static float min_angle_diff_display(float a_deg, float b_deg)
 {
+    const float span = pwm_config_get_axis_span_deg();
+    if (span > 360.5f) {
+        /* Erweiterter Span: lineare Distanz (0 und 360 sind verschiedene Lagen). */
+        return std::fabs(a_deg - b_deg);
+    }
     float d = std::fabs(a_deg - b_deg);
     if (d > 180.0f) {
         d = 360.0f - d;
@@ -608,8 +644,8 @@ static MotionBusResolve resolve_motion_bus(float logical_deg, float current_bus,
         return {bus_main, false};
     }
     float logical_back = logical_deg + 180.0f;
-    if (logical_back >= 360.0f) {
-        logical_back -= 360.0f;
+    if (logical_back >= pwm_config_get_axis_span_deg()) {
+        logical_back = norm_span_add(logical_back);
     }
     const float bus_back = display_to_bus_for_idx(logical_back, ant_1_to_3);
     const float d_main = std::fabs(current_bus - bus_main);
@@ -627,10 +663,10 @@ static float bus_to_logical_display(float bus_mech, int ant_1_to_3)
         return bus_to_display_for_idx(bus_mech, ant_1_to_3);
     }
     if (s_dipole_back_lobe_active) {
-        return bus_to_display_for_idx(norm360_add(bus_mech + 180.0f), ant_1_to_3);
+        return bus_to_display_for_idx(norm_span_add(bus_mech + 180.0f), ant_1_to_3);
     }
     const float logical_main = bus_to_display_for_idx(bus_mech, ant_1_to_3);
-    const float logical_back = bus_to_display_for_idx(norm360_add(bus_mech + 180.0f), ant_1_to_3);
+    const float logical_back = bus_to_display_for_idx(norm_span_add(bus_mech + 180.0f), ant_1_to_3);
     if (s_encoder_adjusting || rotor_rs485_is_position_polling()) {
         const float target = s_encoder_target_deg;
         const float d_main = min_angle_diff_display(logical_main, target);
@@ -658,7 +694,7 @@ static int grad_acc_rotation_from_antoff(int ant_1_to_3)
     return static_cast<int>(r);
 }
 
-/** lv_arc_get_value → Busgrad auf der gedrehten Arc-Skala. */
+/** lv_arc_get_value → Busgrad auf der gedrehten Arc-Skala (ohne Span-Zonenwahl). */
 static float arc_int_value_to_bus_deg(int v)
 {
     if (v >= 360) {
@@ -667,7 +703,38 @@ static float arc_int_value_to_bus_deg(int v)
     return static_cast<float>(v);
 }
 
-/** Arc: mechanische Lage; bei Dipol-Rückkeule Arc-Wert +180° (logische Strahlrichtung am Zeiger). */
+/** Arc-Wert (0..360) → Busgrad; bei Span > 360 die Zone mit kürzerer LINEARER Fahrstrecke.
+ * Anschlag am Span-Ende: echte Strecke ist |Ziel−Ist|, kein Wraparound.
+ * Beispiel: Ist 340°, Arc auf 40 → Kandidat 40 (300°) vs. 400 (60°) → 400°. */
+static float arc_value_to_bus_shortest(int v, float current_bus)
+{
+    float base = arc_int_value_to_bus_deg(v);
+    const float span = pwm_config_get_axis_span_deg();
+    if (span <= 360.5f) {
+        return base;
+    }
+    float best = base;
+    float best_d = std::fabs(current_bus - base);
+    const float alt = base + 360.0f;
+    if (alt <= span + 0.05f) {
+        const float d = std::fabs(current_bus - alt);
+        if (d < best_d) {
+            best = alt;
+            best_d = d;
+        }
+    }
+    /* Arc 360: auch Span-Endlage (z. B. 420) als Kandidat, falls näher */
+    if (v >= 360) {
+        const float d_span = std::fabs(current_bus - span);
+        if (d_span < best_d) {
+            best = span;
+        }
+    }
+    return best;
+}
+
+/** Arc: mechanische Lage; bei Dipol-Rückkeule Arc-Wert +180° (logische Strahlrichtung am Zeiger).
+ * Knauf-Farbe: Typ 3 → grün in der 1. Umdrehung (≤360°), rot darüber; sonst immer rot. */
 static void grad_acc_sync_bus(float bus_mech_deg, int ant_1_to_3, bool dipole_back_lobe)
 {
     if (!objects.grad_acc) {
@@ -675,11 +742,18 @@ static void grad_acc_sync_bus(float bus_mech_deg, int ant_1_to_3, bool dipole_ba
     }
     float arc_bus = bus_mech_deg;
     if (pwm_config_get_antdp(ant_1_to_3) && dipole_back_lobe) {
-        arc_bus = norm360_add(bus_mech_deg + 180.0f);
+        arc_bus = norm_span_add(bus_mech_deg + 180.0f);
     }
     s_arc_updating = true;
     lv_arc_set_value(objects.grad_acc, deg_to_arc_value(arc_bus));
     lv_arc_set_rotation(objects.grad_acc, grad_acc_rotation_from_antoff(ant_1_to_3));
+    {
+        uint32_t knob = 0xff0000u;
+        if (pwm_config_get_enc_type() == 3u) {
+            knob = (bus_mech_deg > 360.0f) ? 0xff0000u : 0x43b302u;
+        }
+        lv_obj_set_style_bg_color(objects.grad_acc, lv_color_hex(knob), LV_PART_KNOB);
+    }
     s_arc_updating = false;
 }
 
@@ -708,7 +782,9 @@ static void fmt_taget_from_wrapped_tenths(char *buf, size_t n, int tenths)
 
 static void fmt_taget_from_display_deg(char *buf, size_t n, float deg)
 {
-    if (deg >= 359.5f) {
+    const float span = pwm_config_get_axis_span_deg();
+    /* Bei Span 360: Homing-Endlage 360,0 anzeigen. Bei Span>360 (Typ 3) 361…span darstellbar. */
+    if (span <= 360.5f && deg >= 359.5f) {
         snprintf(buf, n, "360,0");
         return;
     }
@@ -817,6 +893,21 @@ static void on_ref_status(bool referenced)
     lvgl_port_unlock();
 }
 
+static int wrap_tenths_delta(int d)
+{
+    const int span_t = static_cast<int>(std::lround(
+        static_cast<double>(pwm_config_get_axis_span_deg()) * 10.0));
+    const int half = (span_t > 0) ? (span_t / 2) : 1800;
+    const int full = (span_t > 0) ? span_t : 3600;
+    if (d > half) {
+        d -= full;
+    }
+    if (d < -half) {
+        d += full;
+    }
+    return d;
+}
+
 /**
  * True, wenn bus_to_display(Soll) in Zehntelgrad nur um typisches Float-Rauschen von der Encoder-Session
  * abweicht (z. B. 353,7499° → floor → 353,7 angezeigt obwohl Soll 353,8). Dann taget_dg nicht überschreiben.
@@ -824,13 +915,17 @@ static void on_ref_status(bool referenced)
  */
 static bool bus_target_matches_session_tenth_noise(float disp_deg, int enc_tenths)
 {
+    const int span_t = static_cast<int>(std::lround(
+        static_cast<double>(pwm_config_get_axis_span_deg()) * 10.0));
+    const double half = (span_t > 0) ? (span_t / 2.0) : 1800.0;
+    const double full = (span_t > 0) ? static_cast<double>(span_t) : 3600.0;
     double u = static_cast<double>(disp_deg) * 10.0;
     double e = static_cast<double>(enc_tenths);
     double diff = u - e;
-    if (diff > 1800.0) {
-        diff -= 3600.0;
-    } else if (diff < -1800.0) {
-        diff += 3600.0;
+    if (diff > half) {
+        diff -= full;
+    } else if (diff < -half) {
+        diff += full;
     }
     return std::fabs(diff) < 0.5;
 }
@@ -856,13 +951,7 @@ static void on_target_deg(float bus_deg)
         const int ant_probe = static_cast<int>(pwm_config_get_last_antenna());
         const float disp_probe = bus_to_logical_display(bus_deg, ant_probe);
         const int incoming_t = deg_to_tenths_rounded(disp_probe);
-        int d = incoming_t - s_encoder_tenths;
-        if (d > 1800) {
-            d -= 3600;
-        }
-        if (d < -1800) {
-            d += 3600;
-        }
+        const int d = wrap_tenths_delta(incoming_t - s_encoder_tenths);
         if (d > 2 || d < -2) {
             return;
         }
@@ -880,13 +969,7 @@ static void on_target_deg(float bus_deg)
      * auf einmal: d != -1, kein Konflikt. */
     const int bus_t = deg_to_tenths_rounded(disp);
     {
-        int d = bus_t - s_encoder_tenths;
-        if (d > 1800) {
-            d -= 3600;
-        }
-        if (d < -1800) {
-            d += 3600;
-        }
+        const int d = wrap_tenths_delta(bus_t - s_encoder_tenths);
         constexpr uint32_t kBusTargetOneTenthLagProtectMs = 4500u;
         if (!rotor_rs485_is_remote_setpos_motion() &&
             (uint32_t)(millis() - s_last_encoder_step_ms) < kBusTargetOneTenthLagProtectMs &&
@@ -936,6 +1019,29 @@ static void on_position_deg(float bus_deg_ui)
     lvgl_port_unlock();
 }
 
+/** Arc-Drag: SETPOSCC an PC-/Zweit-Master (Vorschau wie Encoder), max. alle 100 ms. */
+static void arc_drag_send_setposcc(float display_deg, int ant_1_to_3)
+{
+    s_arc_drag_last_disp_deg = display_deg;
+    s_arc_drag_cc_have_deg = true;
+    const uint32_t now = millis();
+    if ((int32_t)(now - s_arc_drag_cc_next_ms) < 0) {
+        return;
+    }
+    s_arc_drag_cc_next_ms = now + ARC_DRAG_SETPOSCC_MS;
+    rotor_rs485_send_setposcc_degrees(display_to_bus_for_idx(display_deg, ant_1_to_3));
+}
+
+static void arc_drag_setposcc_loop(void)
+{
+    if (!s_arc_dragging || !s_arc_drag_cc_have_deg || !rotor_rs485_is_referenced()) {
+        return;
+    }
+    arc_drag_send_setposcc(
+        s_arc_drag_last_disp_deg,
+        static_cast<int>(pwm_config_get_last_antenna()));
+}
+
 static void on_arc(lv_event_t *e)
 {
     lv_event_code_t c = lv_event_get_code(e);
@@ -948,6 +1054,8 @@ static void on_arc(lv_event_t *e)
         s_arc_dragging = true;
         s_arc_moved_this_press = false;
         s_arc_value_at_press = lv_arc_get_value(arc);
+        s_arc_drag_cc_next_ms = 0;
+        s_arc_drag_cc_have_deg = false;
         /* Encoder-Session hier NICHT abbrechen: kurzer Touch ohne Drehen soll keine Klicks „verschlucken“
          * und kein ausstehendes SETPOSDG verwerfen — erst bei echtem Drag (VALUE_CHANGED). */
     }
@@ -975,13 +1083,16 @@ static void on_arc(lv_event_t *e)
         s_arc_moved_this_press = true;
         const int v = lv_arc_get_value(arc);
         const int ant = static_cast<int>(pwm_config_get_last_antenna());
-        const float disp = bus_to_display_for_idx(arc_int_value_to_bus_deg(v), ant);
+        const float disp = bus_to_display_for_idx(
+            arc_value_to_bus_shortest(v, s_last_bus_ist_deg), ant);
         char buf[16];
         fmt_taget_from_display_deg(buf, sizeof(buf), disp);
         taget_dg_set_display_text(buf);
+        arc_drag_send_setposcc(disp, ant);
     }
     if (c == LV_EVENT_RELEASED) {
         s_arc_dragging = false;
+        s_arc_drag_cc_have_deg = false;
         /* Pieps immer beim Loslassen (Arc-Callback nur bei Touch auf dem Arc) — nicht hinter
          * s_arc_updating verstecken: sonst kein Ton und kein GOTO, wenn zufällig Flag noch stand. */
         touch_feedback_arc_release();
@@ -1000,7 +1111,7 @@ static void on_arc(lv_event_t *e)
         }
         const int ant = static_cast<int>(pwm_config_get_last_antenna());
         const float logical_tgt =
-            bus_to_display_for_idx(arc_int_value_to_bus_deg(target_v), ant);
+            bus_to_display_for_idx(arc_value_to_bus_shortest(target_v, s_last_bus_ist_deg), ant);
         char buf[16];
         fmt_taget_from_display_deg(buf, sizeof(buf), logical_tgt);
         taget_dg_set_display_text(buf);
@@ -1168,7 +1279,7 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
         const MotionBusResolve r = resolve_motion_bus(deg, s_last_bus_ist_deg, ant);
         const int arc_int = deg_to_arc_value(
             pwm_config_get_antdp(ant) && r.use_back_lobe
-                ? norm360_add(r.bus_cmd + 180.0f)
+                ? norm_span_add(r.bus_cmd + 180.0f)
                 : r.bus_cmd);
         if (arc_int != s_encoder_arc_int_cached) {
             grad_acc_sync_bus(r.bus_cmd, ant, r.use_back_lobe);
@@ -1378,6 +1489,8 @@ extern "C" void rotor_pwm_ui_loop(void)
 
 extern "C" void rotor_app_loop(void)
 {
+    arc_drag_setposcc_loop();
+
     if (!s_encoder_adjusting) {
         return;
     }

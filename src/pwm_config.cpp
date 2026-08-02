@@ -37,6 +37,10 @@ static uint8_t s_last_antenna = 1;
 static float s_antoff_deg[3] = { 0.0f, 0.0f, 0.0f };
 static float s_opening_deg[3] = { 0.0f, 0.0f, 0.0f };
 static uint8_t s_antdp[3] = { 0, 0, 0 };
+/** GETENCTYPE: 1 = Axis, 2 = Ring, 3 = erweiterter Ring (z. B. 420°) — nur vom Rotor, nicht config.json */
+static uint8_t s_enc_type = 1;
+/** GETMAXDG in Grad (nach Umrechnung aus 0,01°-Einheiten falls nötig) */
+static float s_axis_max_deg = 360.0f;
 
 static int parse_int_after_key(const char *json, const char *key)
 {
@@ -119,6 +123,10 @@ void pwm_config_load_defaults(void)
     s_ant_label[1][sizeof(s_ant_label[1]) - 1] = '\0';
     s_ant_label[2][sizeof(s_ant_label[2]) - 1] = '\0';
     s_antoff_deg[0] = s_antoff_deg[1] = s_antoff_deg[2] = 0.0f;
+    s_opening_deg[0] = s_opening_deg[1] = s_opening_deg[2] = 0.0f;
+    s_antdp[0] = s_antdp[1] = s_antdp[2] = 0;
+    s_enc_type = 1;
+    s_axis_max_deg = 360.0f;
     s_master_id = 2;
     s_rotor_id = 20;
     s_touch_beep_freq_hz = 1100;
@@ -382,6 +390,46 @@ void pwm_config_set_antdp(int idx, uint8_t v_0_or_1)
         return;
     }
     s_antdp[idx - 1] = (v_0_or_1 != 0) ? 1u : 0u;
+}
+
+uint8_t pwm_config_get_enc_type(void)
+{
+    return s_enc_type;
+}
+
+void pwm_config_set_enc_type(uint8_t type_1_to_3)
+{
+    if (type_1_to_3 >= 1u && type_1_to_3 <= 3u) {
+        s_enc_type = type_1_to_3;
+    }
+}
+
+float pwm_config_get_axis_max_deg(void)
+{
+    return s_axis_max_deg;
+}
+
+void pwm_config_set_axis_max_deg_raw(float raw_from_bus)
+{
+    float deg = raw_from_bus;
+    /* Protokoll speichert amax in 0,01° (z. B. 42000) — manche ACKs liefern bereits Grad. */
+    if (deg > 1000.0f) {
+        deg *= 0.01f;
+    }
+    if (deg < 0.0f) {
+        deg = 0.0f;
+    } else if (deg > 720.0f) {
+        deg = 720.0f;
+    }
+    s_axis_max_deg = deg;
+}
+
+float pwm_config_get_axis_span_deg(void)
+{
+    if (s_enc_type == 3u && s_axis_max_deg >= 360.0f && s_axis_max_deg <= 720.0f) {
+        return s_axis_max_deg;
+    }
+    return 360.0f;
 }
 
 uint16_t pwm_config_get_touch_beep_freq_hz(void)

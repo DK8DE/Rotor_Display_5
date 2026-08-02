@@ -50,6 +50,24 @@ void pwm_config_set_opening_deg(int idx, float deg);
 uint8_t pwm_config_get_antdp(int idx);
 void pwm_config_set_antdp(int idx, uint8_t v_0_or_1);
 
+/** Encoder-Variante (Rotor GETENCTYPE): 1 = Axis/Motor, 2 = Ring, 3 = erweiterter Ring (z. B. 420°) — nur vom Rotor */
+uint8_t pwm_config_get_enc_type(void);
+void pwm_config_set_enc_type(uint8_t type_1_to_3);
+
+/** Max-Winkel in Grad (Rotor GETMAXDG) — Rohwert vom Bus; wirksamer Span über pwm_config_get_axis_span_deg() */
+float pwm_config_get_axis_max_deg(void);
+/**
+ * Rohwert vom Bus setzen. Werte > 1000 werden als 0,01°-Einheiten (z. B. 42000 → 420°)
+ * interpretiert, sonst als Grad (z. B. 420,00).
+ */
+void pwm_config_set_axis_max_deg_raw(float raw_from_bus);
+
+/**
+ * Wirksamer Fahrbereich in Grad: 360 (Typ 1/2 oder unplausibel) bzw. axis_max (Typ 3, typ. 420).
+ * Plausibel nur wenn enc_type == 3 und axis_max in [360 … 720].
+ */
+float pwm_config_get_axis_span_deg(void);
+
 /** UI-Touch-Pieps (Signals/ATtiny): Frequenz Hz (200…4000), Lautstärke 0…50 */
 uint16_t pwm_config_get_touch_beep_freq_hz(void);
 void pwm_config_set_touch_beep_freq_hz(uint16_t hz);

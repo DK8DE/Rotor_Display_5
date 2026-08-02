@@ -14,6 +14,8 @@
  * GETCONCHA/SETCONCHA: Antennenwechsel 1 = taget behalten + SETPOS, 0 = taget = Ist-Anzeige (config concha).
  * GETANTDP1…3 / SETANTDP1…3: Dipol-Flag pro Antenne (0/1) — Boot-Kette nach GETANTOFF.
  * GETCONLEDP/SETCONLEDP: NeoPixel-Ring global 0…100 % (config.json conledp auf FFat).
+ * GETASELECT: aktive Antenne 1…3 (pwm_config last_antenna) — Antwort ACK_GETASELECT an PC.
+ * GETENCTYPE/GETMAXDG: Boot nach GETANGLE — Encoder-Typ 3 aktiviert erweiterten Fahrbereich (Span).
  * GETTEMPM zyklisch alle ROTOR_MOTOR_TEMP_POLL_MS (5 s); Wetter-GETs unverändert gestaffelt.
  *
  * Verbindung: Fehler 10 (Verbindungstimeout), wenn länger kein Telegramm vom Slave (SRC=Rotor-ID)
@@ -112,6 +114,7 @@ extern "C" void rotor_app_antenna_offset_changed(void);
 #define ROTOR_OWN_DST_SLAVE_LINE_MATCH_MS 280u
 #endif
 
+
 /** Referenz + Betrieb: keine Antwort vom Rotor (Slave) seit so lang → Fehler 10 Verbindungstimeout.
  * Der Controller pollt regelmäßig; Timeout daher bewusst deutlich unter 5 s halten. */
 #ifndef ROTOR_CONN_LOST_TIMEOUT_MS
@@ -150,6 +153,8 @@ enum class Pending : uint8_t {
     GetAngle1,
     GetAngle2,
     GetAngle3,
+    GetEncType,
+    GetMaxDg,
     GetAnemo,
     GetTempA,
     GetWindDir,
@@ -170,6 +175,8 @@ static bool is_antenna_boot_get_pending(Pending p)
     case Pending::GetAngle1:
     case Pending::GetAngle2:
     case Pending::GetAngle3:
+    case Pending::GetEncType:
+    case Pending::GetMaxDg:
         return true;
     default:
         return false;
@@ -191,6 +198,8 @@ static bool is_proxy_blocked_poll_pending(Pending p)
     case Pending::GetAngle1:
     case Pending::GetAngle2:
     case Pending::GetAngle3:
+    case Pending::GetEncType:
+    case Pending::GetMaxDg:
     case Pending::GetAnemo:
     case Pending::GetTempA:
     case Pending::GetWindDir:
@@ -323,6 +332,9 @@ static uint8_t s_antenna_boot_phase = 0;
 /** Nach erfolgreicher GETANTOFF-Kette: GETANGLE1→2→3 (Öffnungswinkel); phase 0 = inaktiv */
 static bool s_angle_boot_pending = false;
 static uint8_t s_angle_boot_phase = 0;
+/** Nach GETANGLE: GETENCTYPE → GETMAXDG (Fahrbereich / Encoder-Typ 3); phase 0 = inaktiv */
+static bool s_enc_boot_pending = false;
+static uint8_t s_enc_boot_phase = 0;
 
 /** Zuletzt #FremdMaster:RotorID:… gesehen (Millis); 0 = noch keiner */
 static uint32_t s_last_foreign_master_to_slave_ms = 0;
@@ -348,10 +360,17 @@ static uint32_t s_next_motortemp_ms = 0;
 static bool s_boot_test_done = false;
 static uint8_t s_boot_test_timeout_count = 0;
 
+static void abort_enc_boot(void)
+{
+    s_enc_boot_pending = false;
+    s_enc_boot_phase = 0;
+}
+
 static void abort_angle_boot(void)
 {
     s_angle_boot_pending = false;
     s_angle_boot_phase = 0;
+    abort_enc_boot();
 }
 
 static void abort_antenna_boot(void)
@@ -460,7 +479,7 @@ float rotor_rs485_get_last_target_bus_deg(void) { return s_goto_commanded_deg; }
 
 bool rotor_rs485_boot_read_in_progress(void)
 {
-    return s_antenna_boot_pending || s_angle_boot_pending;
+    return s_antenna_boot_pending || s_angle_boot_pending || s_enc_boot_pending;
 }
 
 bool rotor_rs485_is_foreign_pc_listen_mode(void)
@@ -525,14 +544,43 @@ static float normalize_deg_0_360(float d)
     return x;
 }
 
+/** Positions-/Zielwinkel im wirksamen Fahrbereich (360 oder Typ-3-Span, z. B. 420).
+ * Vor GETENCTYPE/GETMAXDG ist der Span noch 360 — Rohwerte >360 (Typ 3) nicht falten,
+ * sonst wird z. B. 372° → 12° und bleibt falsch in der Anzeige. */
+static float normalize_deg_span(float d)
+{
+    const float span = pwm_config_get_axis_span_deg();
+    if (span > 360.5f) {
+        float x = fmodf(d, span);
+        if (x < 0.0f) {
+            x += span;
+        }
+        return x;
+    }
+    /* Span noch unbekannt / Typ 1–2: Werte knapp über 360 bis GETMAXDG behalten */
+    if (d > 360.5f && d <= 720.0f) {
+        return d;
+    }
+    return normalize_deg_0_360(d);
+}
+
 /**
  * Anzeige: Bus meldet oft 360,00° — normalize_deg_0_360 liefert 0° (gleiche Lage).
  * Dann soll die UI 360° zeigen, nicht 0° (Homing-Endlage / Log: ACK …360,00).
  * Referenziert: manche Slaves melden 0,0…0,5° statt 360° an der Endlage (Restfehler) —
  * sonst zeigt Ist/Soll nach Start fälschlich z.B. 0,2° statt 360°.
+ * Bei Span > 360 bzw. Rohwert >360 (Boot vor GETMAXDG) sind 0° und 360° verschiedene Lagen.
  */
 static float bus_deg_for_ui(float deg_norm, float deg_raw)
 {
+    const float span = pwm_config_get_axis_span_deg();
+    if (span > 360.5f || deg_raw > 360.5f) {
+        /* Span-Endlage (z. B. 420,00 → fmod → 0) als Span anzeigen */
+        if (span > 360.5f && deg_norm < 0.01f && deg_raw >= span - 0.5f) {
+            return span;
+        }
+        return deg_norm;
+    }
     if (deg_norm < 0.01f && deg_raw >= 359.5f) {
         return 360.0f;
     }
@@ -542,14 +590,10 @@ static float bus_deg_for_ui(float deg_norm, float deg_raw)
     return deg_norm;
 }
 
-/** Kleinster Winkelabstand 0…180° */
-static float min_angle_diff(float a_deg, float b_deg)
+/** Lineare Bus-Distanz (mechanischer Anschlag — kein Wraparound). */
+static float linear_span_diff(float a_deg, float b_deg)
 {
-    float d = fabsf(normalize_deg_0_360(a_deg) - normalize_deg_0_360(b_deg));
-    if (d > 180.0f) {
-        d = 360.0f - d;
-    }
-    return d;
+    return fabsf(a_deg - b_deg);
 }
 
 /**
@@ -696,7 +740,7 @@ static void send_request(const char *cmd, const char *params_str, Pending p)
         /* Versatz-/Dipol-/Winkel-Boot ist einmalig und essenziell: auch als Mitläufer senden,
          * solange die jeweilige Boot-Kette noch nicht abgeschlossen ist. */
         const bool boot_read = is_antenna_boot_get_pending(p) &&
-                               (s_antenna_boot_pending || s_angle_boot_pending);
+                               (s_antenna_boot_pending || s_angle_boot_pending || s_enc_boot_pending);
         if (!boot_read) {
             return;
         }
@@ -835,10 +879,13 @@ bool rotor_rs485_goto_degrees(float deg)
                s_pending == Pending::GetAngle3) {
         clear_pending();
         abort_angle_boot();
+    } else if (s_pending == Pending::GetEncType || s_pending == Pending::GetMaxDg) {
+        clear_pending();
+        abort_enc_boot();
     } else if (s_pending != Pending::None) {
         clear_pending();
     }
-    float n = normalize_deg_0_360(deg);
+    float n = normalize_deg_span(deg);
     char p[40];
     format_deg_param(p, sizeof(p), n);
     s_target_deg = n;
@@ -874,7 +921,7 @@ void rotor_rs485_send_setposcc_degrees(float deg)
     if (!bus_send_allowed_by_fault()) {
         return;
     }
-    s_setposcc_queued_deg = normalize_deg_0_360(deg);
+    s_setposcc_queued_deg = normalize_deg_span(deg);
     s_setposcc_queued = true;
 }
 
@@ -1098,7 +1145,7 @@ static bool parse_setposdg_command_deg(const char *line, float *out_deg)
     if (n == 0) {
         return false;
     }
-    *out_deg = normalize_deg_0_360(strtof(tmp, nullptr));
+    *out_deg = normalize_deg_span(strtof(tmp, nullptr));
     return true;
 }
 
@@ -1624,6 +1671,16 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
         return true;
     }
 
+    /* #<PC>:<cont_id>:GETASELECT:0:CS$ → ACK_GETASELECT:<1|2|3> */
+    if (strstr(line, ":GETASELECT:")) {
+        if (!CFG_TRY_TAG(":GETASELECT:")) {
+            config_reply_nak(src, "NAK_GETASELECT", 2);
+            return true;
+        }
+        config_reply_ack_u8(src, "ACK_GETASELECT", pwm_config_get_last_antenna());
+        return true;
+    }
+
     static const struct {
         const char *get_tag;
         const char *set_tag;
@@ -1741,6 +1798,8 @@ static void on_ack_timeout()
         case Pending::GetAngle1:
         case Pending::GetAngle2:
         case Pending::GetAngle3:
+        case Pending::GetEncType:
+        case Pending::GetMaxDg:
         case Pending::Test:
             clear_pending();
             return;
@@ -1759,7 +1818,7 @@ static void on_ack_timeout()
     case Pending::SetPosDg: {
         if (s_setposdg_retry_count < ROTOR_RS485_SETPOSDG_MAX_RETRIES) {
             char p[40];
-            format_deg_param(p, sizeof(p), normalize_deg_0_360(s_goto_commanded_deg));
+            format_deg_param(p, sizeof(p), normalize_deg_span(s_goto_commanded_deg));
             send_request("SETPOSDG", p, Pending::SetPosDg);
             s_setposdg_retry_count++;
         } else {
@@ -1823,6 +1882,12 @@ static void on_ack_timeout()
         break;
     case Pending::GetAngle3:
         send_request("GETANGLE3", "1", Pending::GetAngle3);
+        break;
+    case Pending::GetEncType:
+        send_request("GETENCTYPE", "0", Pending::GetEncType);
+        break;
+    case Pending::GetMaxDg:
+        send_request("GETMAXDG", "0", Pending::GetMaxDg);
         break;
     case Pending::GetAnemo:
         send_request("GETANEMO", "0", Pending::GetAnemo);
@@ -2164,6 +2229,62 @@ static bool parse_ack_getangle3(const char *line)
     if (s_angle_boot_pending && s_angle_boot_phase == 3 && was) {
         s_angle_boot_pending = false;
         s_angle_boot_phase = 0;
+        s_enc_boot_pending = true;
+        s_enc_boot_phase = 1;
+        send_request("GETENCTYPE", "0", Pending::GetEncType);
+    }
+    return true;
+}
+
+static bool parse_ack_getenctype(const char *line)
+{
+    if (!strstr(line, ":ACK_GETENCTYPE:")) {
+        return false;
+    }
+    const float v = parse_ack_antoff_value_after_tag(line, ":ACK_GETENCTYPE:");
+    const bool valid = (v == v);
+    int type = 0;
+    if (valid) {
+        type = (int)(v + 0.5f);
+        if (type >= 1 && type <= 3) {
+            pwm_config_set_enc_type((uint8_t)type);
+        }
+    }
+    const bool was = (s_pending == Pending::GetEncType);
+    if (was) {
+        clear_pending();
+    }
+    if (s_enc_boot_pending && s_enc_boot_phase == 1 && was) {
+        s_enc_boot_phase = 2;
+        send_request("GETMAXDG", "0", Pending::GetMaxDg);
+    }
+    return true;
+}
+
+static bool parse_ack_getmaxdg(const char *line)
+{
+    if (!strstr(line, ":ACK_GETMAXDG:")) {
+        return false;
+    }
+    const float v = parse_ack_antoff_value_after_tag(line, ":ACK_GETMAXDG:");
+    const bool valid = (v == v);
+    if (valid) {
+        pwm_config_set_axis_max_deg_raw(v);
+        s_pending_antenna_offset_notify = true;
+    }
+    const bool was = (s_pending == Pending::GetMaxDg);
+    if (was) {
+        clear_pending();
+    }
+    if (s_enc_boot_pending && s_enc_boot_phase == 2 && was) {
+        s_enc_boot_pending = false;
+        s_enc_boot_phase = 0;
+        s_pending_antenna_offset_notify = true;
+        /* Span jetzt bekannt — Position erneut lesen (früherer GETPOSDG lief oft noch mit Span 360). */
+        if (s_slave_referenced && s_pending == Pending::None) {
+            s_align_target_after_pos_read = true;
+            send_request("GETPOSDG", "0", Pending::GetPosDg);
+        }
     }
     return true;
 }
@@ -2285,7 +2406,7 @@ static bool parse_ack_getposdg(const char *line)
     }
     valbuf[i] = '\0';
     const float deg_raw = parse_rs485_deg_valbuf_to_float(valbuf);
-    const float deg = normalize_deg_0_360(deg_raw);
+    const float deg = normalize_deg_span(deg_raw);
     const float deg_ui = bus_deg_for_ui(deg, deg_raw);
     /* Ist: immer aus Slave-Position (Mitläufer-PC kann GETPOSDG mitschicken — Anzeige bleibt aktuell). */
     notify_pos(deg_ui);
@@ -2302,9 +2423,10 @@ static bool parse_ack_getposdg(const char *line)
 
     /* Positionsfahrt / Toleranz:
      * - Eigenbetrieb: nur eigene GETPOSDG-ACKs (for_us)
-     * - Mitlaeuferbetrieb: fremde GETPOSDG-ACKs mitnutzen, damit kein zusaetzlicher eigener GETPOSDG-Sturm entsteht. */
+     * - Mitlaeuferbetrieb: fremde GETPOSDG-ACKs mitnutzen, damit kein zusaetzlicher eigener GETPOSDG-Sturm entsteht.
+     * Lineare Distanz: mechanischer Anschlag — bei Span>360 wären 361° und 1° sonst fälschlich „angekommen“. */
     if (s_poll_pos && (for_us || rotor_rs485_is_foreign_pc_listen_mode())) {
-        if (min_angle_diff(deg, s_target_deg) <= ROTOR_POS_TOL_DEG) {
+        if (linear_span_diff(deg, s_target_deg) <= ROTOR_POS_TOL_DEG) {
             if (s_pos_grace_end_ms == 0) {
                 s_pos_grace_end_ms = millis() + ROTOR_POLL_POS_GRACE_MS;
             }
@@ -2325,7 +2447,7 @@ static bool parse_ack_getposdg(const char *line)
 
     /* PC-/USB-Fahrt: gleiche Toleranz wie lokales Polling, kein s_poll_pos */
     if (s_remote_setpos_motion && !s_poll_pos) {
-        if (min_angle_diff(deg, s_remote_setpos_target_deg) <= ROTOR_POS_TOL_DEG) {
+        if (linear_span_diff(deg, s_remote_setpos_target_deg) <= ROTOR_POS_TOL_DEG) {
             if (s_remote_setpos_grace_end_ms == 0) {
                 s_remote_setpos_grace_end_ms = millis() + ROTOR_POLL_POS_GRACE_MS;
             }
@@ -2499,6 +2621,16 @@ static bool parse_nak_and_clear(const char *line)
         abort_angle_boot();
         return true;
     }
+    if (strstr(line, ":NAK_GETENCTYPE:") && s_pending == Pending::GetEncType) {
+        clear_pending();
+        abort_enc_boot();
+        return true;
+    }
+    if (strstr(line, ":NAK_GETMAXDG:") && s_pending == Pending::GetMaxDg) {
+        clear_pending();
+        abort_enc_boot();
+        return true;
+    }
     if (strstr(line, ":NAK_GETERR:") && s_pending == Pending::GetErr) {
         clear_pending();
         if (!s_startup_err_known) {
@@ -2554,6 +2686,11 @@ static bool parse_slave_err(const char *line)
         s_pending == Pending::GetAngle3) {
         clear_pending();
         abort_angle_boot();
+        return true;
+    }
+    if (s_pending == Pending::GetEncType || s_pending == Pending::GetMaxDg) {
+        clear_pending();
+        abort_enc_boot();
         return true;
     }
     if (s_pending == Pending::GetPosDg || s_pending == Pending::SetPosDg || s_pending == Pending::Stop ||
@@ -2692,6 +2829,12 @@ static void process_complete_line(const char *line, size_t len)
         if (parse_ack_getangle3(line)) {
             return;
         }
+        if (parse_ack_getenctype(line)) {
+            return;
+        }
+        if (parse_ack_getmaxdg(line)) {
+            return;
+        }
         if (parse_ack_err(line)) {
             return;
         }
@@ -2797,6 +2940,10 @@ void rotor_rs485_init(void)
     s_hw_snap_retarget_active = false;
     s_antenna_boot_pending = true;
     s_antenna_boot_phase = 0;
+    s_angle_boot_pending = false;
+    s_angle_boot_phase = 0;
+    s_enc_boot_pending = false;
+    s_enc_boot_phase = 0;
     s_next_weather_ms = millis() + 2000u;
     s_weather_phase = 0;
     s_next_motortemp_ms = millis() + 2000u;
@@ -2934,6 +3081,27 @@ static void try_angle_boot_step(void)
     }
 }
 
+/** Encoder-Typ / Max-Winkel-Boot: GETENCTYPE → GETMAXDG. */
+static void try_enc_boot_step(void)
+{
+    if (!s_enc_boot_pending) {
+        return;
+    }
+    if (s_pending != Pending::None || s_poll_pos || s_poll_ref) {
+        return;
+    }
+    switch (s_enc_boot_phase) {
+    case 1:
+        send_request("GETENCTYPE", "0", Pending::GetEncType);
+        break;
+    case 2:
+        send_request("GETMAXDG", "0", Pending::GetMaxDg);
+        break;
+    default:
+        break;
+    }
+}
+
 /** GETANEMO / GETTEMPA / GETWINDDIR nur ohne Fremd-PC, Stillstand (kein Homing-/Positions-Polling).
  * anemometer=0: nur GETTEMPA (Außentemp im Tab Rotor_Info, kein Wind-Tab). */
 static void try_weather_poll(void)
@@ -2945,6 +3113,9 @@ static void try_weather_poll(void)
         return;
     }
     if (s_angle_boot_pending && s_angle_boot_phase != 0) {
+        return;
+    }
+    if (s_enc_boot_pending && s_enc_boot_phase != 0) {
         return;
     }
     if ((int32_t)(millis() - s_next_weather_ms) < 0) {
@@ -2980,6 +3151,9 @@ static void try_motor_temp_poll(void)
         return;
     }
     if (s_angle_boot_pending && s_angle_boot_phase != 0) {
+        return;
+    }
+    if (s_enc_boot_pending && s_enc_boot_phase != 0) {
         return;
     }
     if ((int32_t)(millis() - s_next_motortemp_ms) < 0) {
@@ -3078,6 +3252,10 @@ void rotor_rs485_loop(void)
             return;
         }
         try_angle_boot_step();
+        if (s_pending != Pending::None) {
+            return;
+        }
+        try_enc_boot_step();
         return;
     }
 
@@ -3128,6 +3306,12 @@ void rotor_rs485_loop(void)
     }
 
     try_angle_boot_step();
+
+    if (s_pending != Pending::None) {
+        return;
+    }
+
+    try_enc_boot_step();
 
     if (s_pending != Pending::None) {
         return;
