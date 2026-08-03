@@ -122,7 +122,7 @@
 <body>
 <div class="section" id="intro">
   <h1>Rotor‑Controller – RS485‑Anleitung &amp; Firmware‑Dokumentation (DE)</h1>
-  <p class="muted">Stand: 2026-08-02 • Fokus: RS485‑Befehle, Einstellungen (INO), Kalibrierung/Statistik, Fehler &amp; Warnungen. Die <b>Befehlstabelle</b> ist mit dem RotorTcpBridge‑Katalog abgeglichen (<code>command_catalog.py</code> / Befehlsfenster). Diese Datei ist mit <code>Info/RotorController_RS485.md</code> abgestimmt.</p>
+  <p class="muted">Stand: 2026-08-03 • Fokus: RS485‑Befehle, Einstellungen (INO), Kalibrierung/Statistik, Fehler &amp; Warnungen. Die <b>Befehlstabelle</b> ist mit dem RotorTcpBridge‑Katalog abgeglichen (<code>command_catalog.py</code> / Befehlsfenster). Diese Datei ist mit <code>Info/RotorController_RS485.md</code> abgestimmt.</p>
 </div>
 <main>
 <section class="toc" id="toc">
@@ -193,7 +193,7 @@
 <pre><code>#20:7:ACK_SETPOSDG:1:28$</code></pre>
 
 <h3>Asynchrone Meldungen (ERR)</h3>
-<p>Wenn ein <b>Fehler</b> auftritt (z.B. Blockade, Not‑Stop, Stall), stoppt der Motor und der Slave sendet ein <code>ERR</code>‑Telegramm asynchron. Neuer Standard ist Broadcast (DST=255):</p>
+<p>Wenn ein <b>Fehler</b> auftritt (z.B. Blockade, Not‑Stop, Stall), stoppt der Motor und der Slave sendet ein <code>ERR</code>‑Telegramm asynchron. Neuer Standard ist Broadcast (DST=255), das die Rotor‑Firmware zur Robustheit gegen Kollisionen <b>bis zu 3× hintereinander</b> sendet (Client‑seitig deduplizieren: gleicher Code mehrfach ist normal, kein neuer Fehler):</p>
 <pre><code>#20:255:ERR:16:291$</code></pre>
 <p>Im Beispiel ist der Fehlercode <code>16</code>. Die Checksumme ist <code>20 + 255 + 16 = 291</code>. Der Fehler bleibt aktiv, bis er quittiert wird (siehe <code>SETREF</code>).</p>
 <p><b>Wichtig:</b> Die Controller-Firmware behandelt <code>ERR</code> an <code>DST=255</code> gleich wie bisherige ERR-Meldungen. Zyklisches <code>GETERR</code> ist dafür nicht mehr erforderlich.</p>
@@ -946,6 +946,10 @@
 <table>
 <tr><th>Befehl</th><th>Antwort</th></tr>
 <tr>
+<td><code>GETCOVERSION</code></td>
+<td><code>ACK_GETCOVERSION</code> / <code>NAK_GETCOVERSION</code> — Firmware‑Version des Display‑Controllers (<code>FIRMWARE_APP_VERSION</code>, z.&nbsp;B. <code>1.3.0</code>), für eine stabile CS mit <code>;0</code> angehängt (analog <code>GETCONANTNAME*</code>).</td>
+</tr>
+<tr>
 <td><code>GETCONRID</code> / <code>GETTCONRID</code> (Alias)</td>
 <td><code>ACK_GETCONRID</code> (Parameter = aktuelle <code>rotor_id</code>)</td>
 </tr>
@@ -1077,7 +1081,7 @@
 <h4 id="cmd-GETERR"><code>GETERR</code></h4>
 <p><b>Was es macht:</b> Aktuellen Fehlercode abfragen.</p>
 <p><b>Details:</b> Antwort <code>ACK_ERR</code> mit einem Code oder 0.</p>
-<p><b>Aktueller Betrieb:</b> In der aktuellen Controller-Firmware wird <code>GETERR</code> nicht mehr zyklisch gepollt. Fehler kommen asynchron als <code>ERR</code> (typisch <code>#&lt;rotor_id&gt;:255:ERR:&lt;code&gt;:&lt;cs&gt;$</code>) und werden direkt übernommen. <code>GETERR</code> ist damit primär für manuelle Diagnose/Service gedacht.</p>
+<p><b>Aktueller Betrieb:</b> In der aktuellen Controller-Firmware wird <code>GETERR</code> nicht mehr zyklisch gepollt. Fehler kommen asynchron als <code>ERR</code> (typisch <code>#&lt;rotor_id&gt;:255:ERR:&lt;code&gt;:&lt;cs&gt;$</code>, vom Rotor bis zu 3× wiederholt) und werden direkt übernommen. <code>GETERR</code> ist damit primär für manuelle Diagnose/Service sowie für den einmaligen Boot-Check gedacht (ein bereits vor dem Einschalten des Display-Controllers bestehender Fehler wird sonst nicht per Broadcast nachgemeldet).</p>
 <hr>
 <h4 id="cmd-GETWARN"><code>GETWARN</code></h4>
 <p><b>Was es macht:</b> Warnungen abfragen (können mehrere sein).</p>

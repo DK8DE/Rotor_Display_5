@@ -47,6 +47,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
+#include "firmware_version.h"
 #include "pwm_config.h"
 #include "rotor_app.h"
 #include "rotor_error_app.h"
@@ -252,6 +253,13 @@ static bool s_pos_ui_deferred = false;
 /** GETREF-Status in loop() flushen (kein LVGL-Lock im RX-Task). */
 static bool s_ref_ui_deferred = false;
 static bool s_ref_ui_value = false;
+/** Soll-Callback (taget_dg) ruft lvgl_port_lock(-1) auf — darf nicht direkt aus dem Parser/Sniffer-Task
+ * laufen (task_sniffer, Prio 4): haelt LVGL z. B. waehrend eines Redraws den Lock laenger, blockiert das
+ * den gesamten RS485-Empfang (s_sniff_q laeuft voll/wird verworfen) und s_last_slave_rx_ms bleibt stehen,
+ * obwohl der Bus objektiv weiterlaeuft — Folge: spontaner „Verbindungsfehler“ (10) + Soll springt auf Ist,
+ * sobald der Stau aufgeloest wird. Deshalb wie Ist/Referenz erst in loop() (rotor_rs485_idle_tasks) flushen. */
+static bool s_target_ui_deferred = false;
+static float s_target_ui_deg = 0.0f;
 
 /** ACK_GETANEMO / ACK_GETTEMPA / ACK_GETTEMPM / ACK_WINDDIR (Anzeige in loop(), nicht im Parser) */
 static float s_last_wind_kmh = 0.0f;
@@ -275,6 +283,13 @@ static float s_goto_commanded_deg = 0.0f;
 static uint32_t s_next_pos_poll_ms = 0;
 /** 0 = noch keine Nachlaufphase; sonst millis()-Zeitpunkt, ab dem Positions-Polling beendet werden darf */
 static uint32_t s_pos_grace_end_ms = 0;
+
+/** Verbindungs-Watchdog (Fehler 10) hat mitten in einer Fahrt gefeuert: Merkt sich, dass GETPOSDG-Polling
+ * (bzw. Fremd-Fahrt-Tracking) fortgesetzt werden muss, sobald der Bus wieder eine gültige Zeile liefert —
+ * sonst bleibt die Anzeige nach einem kurzen Aussetzer (< 1 s) im Idle-Polling stehen, obwohl der Rotor
+ * weiterdreht (siehe rotor_rs485_loop Verbindungs-Watchdog und die Slave-RX-Behandlung). */
+static bool s_resume_poll_pos_after_conn_loss = false;
+static bool s_resume_remote_setpos_after_conn_loss = false;
 
 /** Boot: 2 s warten, dann GETREF → optional GETPOSDG wenn referenziert */
 static bool s_boot_done = false;
@@ -383,6 +398,7 @@ static void abort_antenna_boot(void)
 static void notify_target(float deg);
 static void flush_deferred_position_ui(void);
 static void flush_deferred_ref_ui(void);
+static void flush_deferred_target_ui(void);
 static void try_flush_setposcc(void);
 
 /** Bei Fehler stoppt der Slave — kein weiteres GETPOSDG-Polling / keine ausstehende Pos-Sync bis Recovery */
@@ -410,6 +426,7 @@ void rotor_rs485_idle_tasks(void)
 {
     flush_deferred_position_ui();
     flush_deferred_ref_ui();
+    flush_deferred_target_ui();
     if (s_pending_pwm_config_save) {
         s_pending_pwm_config_save = false;
         pwm_config_save();
@@ -776,6 +793,7 @@ void rotor_rs485_send_setref_homing(void)
         s_pos_grace_end_ms = 0;
         s_hw_snap_retarget_active = false;
         s_setposdg_retry_count = 0;
+        s_resume_poll_pos_after_conn_loss = false;
     } else if (s_pending != Pending::None) {
         return;
     }
@@ -805,6 +823,8 @@ bool rotor_rs485_send_stop(void)
     s_homing_wait_unref_seen = false;
     s_remote_setpos_motion = false;
     s_remote_setpos_grace_end_ms = 0;
+    s_resume_poll_pos_after_conn_loss = false;
+    s_resume_remote_setpos_after_conn_loss = false;
     send_request("STOP", "0", Pending::Stop);
     return true;
 }
@@ -894,6 +914,7 @@ bool rotor_rs485_goto_degrees(float deg)
     s_poll_pos = true;
     s_pos_grace_end_ms = 0;
     s_next_pos_poll_ms = 0;
+    s_resume_poll_pos_after_conn_loss = false;
     send_request("SETPOSDG", p, Pending::SetPosDg);
     /* Callback: Bus-Ist/Soll (normalisiert), UI rechnet Antennenversatz um */
     notify_target(n);
@@ -986,9 +1007,17 @@ static void flush_deferred_ref_ui(void)
 
 static void notify_target(float deg)
 {
-    if (s_target_cb) {
-        s_target_cb(deg);
+    s_target_ui_deg = deg;
+    s_target_ui_deferred = true;
+}
+
+static void flush_deferred_target_ui(void)
+{
+    if (!s_target_ui_deferred || !s_target_cb) {
+        return;
     }
+    s_target_ui_deferred = false;
+    s_target_cb(s_target_ui_deg);
 }
 
 /** Erster Zahlenwert im PARAMS nach ACK-Tag (bis zum nächsten ':') */
@@ -1411,6 +1440,15 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
 
 #define CFG_TRY_TAG(t) \
     extract_tag_params_cs(line, (t), par, sizeof(par), &cs) && config_cs_ok(src, dst, par, cs)
+
+    if (strstr(line, ":GETCOVERSION:")) {
+        if (!CFG_TRY_TAG(":GETCOVERSION:")) {
+            config_reply_nak(src, "NAK_GETCOVERSION", 2);
+            return true;
+        }
+        config_reply_ack_label(src, "ACK_GETCOVERSION", FIRMWARE_APP_VERSION);
+        return true;
+    }
 
     if (strstr(line, ":GETCONRID:") || strstr(line, ":GETTCONRID:")) {
         const char *tag = strstr(line, ":GETTCONRID:") ? ":GETTCONRID:" : ":GETCONRID:";
@@ -2327,8 +2365,17 @@ static bool parse_ack_getref(const char *line)
         s_err10_recovery_getref_pending = false;
         if (ref_ok) {
             s_poll_ref = false;
-            s_align_target_after_pos_read = true;
-            send_request("GETPOSDG", "0", Pending::GetPosDg);
+            if (s_poll_pos) {
+                /* Fahrt lief bereits vor dem Aussetzer und wurde ueber
+                 * s_resume_poll_pos_after_conn_loss schon reaktiviert (siehe process_complete_line):
+                 * Soll NICHT auf die aktuelle Ist-Position zuruecksetzen — sonst "springt" das
+                 * angezeigte Ziel beim kurzen Verbindungsaussetzer auf die Position beim Reconnect
+                 * statt beim urspruenglich befohlenen Winkel zu bleiben. Das naechste GETPOSDG kommt
+                 * ohnehin ueber das normale Polling (s_next_pos_poll_ms). */
+            } else {
+                s_align_target_after_pos_read = true;
+                send_request("GETPOSDG", "0", Pending::GetPosDg);
+            }
         }
         return true;
     }
@@ -2743,10 +2790,16 @@ static void process_complete_line(const char *line, size_t len)
 
     /* Broadcast DST=255: SETCONIDF / SETCONTID → neue master_id (config.json), wenn Controller-ID unbekannt */
     if (dst == ROTOR_RS485_BROADCAST_ID) {
-        /* Neuer Fehlerkanal: Rotor sendet asynchron ERR an Broadcast (#<rotor>:255:ERR:<code>:...). */
-        if (src == (unsigned)s_slave_id && parse_slave_err(line)) {
+        /* Neuer Fehlerkanal: Rotor sendet asynchron ERR an Broadcast (#<rotor>:255:ERR:<code>:...),
+         * laut aktueller Rotor-Firmware bis zu 3x hintereinander (Robustheit gegen Kollisionen).
+         * Jede gültige ERR-Zeile zählt für den Verbindungs-Watchdog — auch das 2./3. Duplikat, das
+         * kein offenes Pending mehr zum Abbrechen findet (parse_slave_err liefert dann false).
+         * Sonst hielte ein Duplikat ohne Pending faelschlich einen Verbindungstimeout (10) fuer moeglich,
+         * obwohl der Rotor gerade aktiv gemeldet hat. */
+        if (src == (unsigned)s_slave_id && strstr(line, ":ERR:")) {
             s_last_slave_rx_ms = millis();
             s_have_slave_rx_ever = true;
+            parse_slave_err(line);
             return;
         }
         if (strstr(line, ":SETCONIDF:") || strstr(line, ":SETCONTID:")) {
@@ -2776,6 +2829,23 @@ static void process_complete_line(const char *line, size_t len)
          * Echte Fehler kommen asynchron als ERR und setzen den Fehlercode danach wieder. */
         if (rotor_error_app_get_error_code() == 10 && !strstr(line, ":ERR:")) {
             rotor_error_app_set_error_code(0);
+            /* Kurzer Aussetzer (< 1 s) während einer Fahrt: Polling/Tracking fortsetzen statt im
+             * Idle-Polling (Wetter/Motortemp) hängen zu bleiben, obwohl der Rotor weiterdreht. */
+            if (s_resume_poll_pos_after_conn_loss) {
+                s_resume_poll_pos_after_conn_loss = false;
+                if (s_slave_referenced) {
+                    s_poll_pos = true;
+                    s_pos_grace_end_ms = 0;
+                    s_next_pos_poll_ms = 0;
+                }
+            }
+            if (s_resume_remote_setpos_after_conn_loss) {
+                s_resume_remote_setpos_after_conn_loss = false;
+                if (s_slave_referenced) {
+                    s_remote_setpos_motion = true;
+                    s_remote_setpos_grace_end_ms = 0;
+                }
+            }
         }
         if (parse_slave_err(line)) {
             return;
@@ -2927,6 +2997,8 @@ void rotor_rs485_init(void)
 {
     rotor_rs485_pre_begin();
     s_err10_recovery_getref_pending = false;
+    s_resume_poll_pos_after_conn_loss = false;
+    s_resume_remote_setpos_after_conn_loss = false;
     s_boot_test_done = false;
     s_boot_test_timeout_count = 0;
     s_last_slave_rx_ms = 0;
@@ -2955,6 +3027,7 @@ void rotor_rs485_init(void)
     s_pos_ui_deferred = false;
     s_ref_ui_value = s_slave_referenced;
     s_ref_ui_deferred = true;
+    s_target_ui_deferred = false;
 }
 
 /** Erstes Paket nach Einschalten: TEST (Ping), 3 Versuche ohne ACK → Fehler 10 */
@@ -3192,6 +3265,14 @@ void rotor_rs485_loop(void)
             conn_timeout = true;
         }
         if (conn_timeout) {
+            /* Fahrt lief gerade (eigenes Polling oder mitgehörte Fremd-Fahrt): nach Wiederkehr
+             * automatisch fortsetzen, statt bis zur nächsten Nutzeraktion im Idle-Polling zu bleiben. */
+            if (s_poll_pos) {
+                s_resume_poll_pos_after_conn_loss = true;
+            }
+            if (s_remote_setpos_motion) {
+                s_resume_remote_setpos_after_conn_loss = true;
+            }
             clear_pending();
             s_err10_recovery_getref_pending = false;
             rotor_error_app_set_error_code(10);

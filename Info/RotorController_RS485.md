@@ -1,6 +1,6 @@
 # Rotor‑Controller – RS485‑Anleitung & Firmware‑Dokumentation (DE)
 
-Stand: 2026-08-02 • Fokus: RS485‑Befehle, Einstellungen (INO), Kalibrierung/Statistik, Fehler & Warnungen. Die **Befehlstabelle** ist mit dem RotorTcpBridge‑Katalog abgeglichen (`command_catalog.py` / Befehlsfenster). Diese Datei ist mit `Info/RotorController_RS485.html` abgestimmt.
+Stand: 2026-08-03 • Fokus: RS485‑Befehle, Einstellungen (INO), Kalibrierung/Statistik, Fehler & Warnungen. Die **Befehlstabelle** ist mit dem RotorTcpBridge‑Katalog abgeglichen (`command_catalog.py` / Befehlsfenster). Diese Datei ist mit `Info/RotorController_RS485.html` abgestimmt.
 
 ## Inhaltsverzeichnis {#toc}
 
@@ -87,7 +87,7 @@ Antwort: `1` bedeutet „angenommen“. Letzter Zahlenwert ist `1` → `CS = 20 
 
 ### Asynchrone Meldungen (ERR)
 
-Wenn ein **Fehler** auftritt (z.B. Blockade, Not‑Stop, Stall), stoppt der Motor und der Slave sendet ein `ERR`‑Telegramm asynchron. Neuer Standard ist Broadcast (DST=255):
+Wenn ein **Fehler** auftritt (z.B. Blockade, Not‑Stop, Stall), stoppt der Motor und der Slave sendet ein `ERR`‑Telegramm asynchron. Neuer Standard ist Broadcast (DST=255), das die Rotor‑Firmware zur Robustheit gegen Kollisionen **bis zu 3× hintereinander** sendet (Client-seitig deduplizieren: gleicher Code mehrfach ist normal, kein neuer Fehler):
 
 ```
 #20:255:ERR:16:291$
@@ -287,6 +287,7 @@ Schreibbefehle speichern in `config.json` (Slow/Fast‑PWM, IDs, Antennen‑Labe
 
 | Befehl | Antwort |
 | --- | --- |
+| `GETCOVERSION` | `ACK_GETCOVERSION` / `NAK_GETCOVERSION` — Firmware‑Version des Display‑Controllers (`FIRMWARE_APP_VERSION`, z. B. `1.3.0`), für eine stabile CS mit `;0` angehängt (analog `GETCONANTNAME*`). |
 | `GETCONRID` / `GETTCONRID` (Alias) | `ACK_GETCONRID` (Parameter = aktuelle `rotor_id`) |
 | `SETCONRID` | `ACK_SETCONRID` / `NAK_SETCONRID` (Rotor‑Slave‑ID 1…254) |
 | `GETCONTID` | `ACK_GETCONTID` (Parameter = `master_id` des Controllers) |
@@ -423,7 +424,7 @@ Hier ist jeder Befehl in einem eigenen Absatz beschrieben: Was er macht, wie man
 
 **Details:** Antwort `ACK_ERR` mit einem Code oder 0.
 
-**Aktueller Betrieb:** In der aktuellen Controller-Firmware wird `GETERR` nicht mehr zyklisch gepollt. Fehler kommen asynchron als `ERR` (typisch `#<rotor_id>:255:ERR:<code>:<cs>$`) und werden direkt übernommen. `GETERR` ist damit primär für manuelle Diagnose/Service gedacht.
+**Aktueller Betrieb:** In der aktuellen Controller-Firmware wird `GETERR` nicht mehr zyklisch gepollt. Fehler kommen asynchron als `ERR` (typisch `#<rotor_id>:255:ERR:<code>:<cs>$`, vom Rotor bis zu 3× wiederholt) und werden direkt übernommen. `GETERR` ist damit primär für manuelle Diagnose/Service sowie für den einmaligen Boot-Check gedacht (ein bereits vor dem Einschalten des Display-Controllers bestehender Fehler wird sonst nicht per Broadcast nachgemeldet).
 
 ---
 
