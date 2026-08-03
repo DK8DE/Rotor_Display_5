@@ -242,7 +242,10 @@ try {
     $buildDir = Join-Path $PSScriptRoot '.pio\build\esp32-s3-viewe'
     $imgsDir = Join-Path $PSScriptRoot 'IMGs'
     Invoke-Step "IMGs aktualisieren (ESP Web Tools)" {
-        Update-WebFlasherImgs -BuildDir $buildDir -ImgsDir $imgsDir -FwVersion $Version -IncludeFatfs $WithFs
+        # Dateisystem (fatfs.bin) gehoert immer ins Web-Flasher-Paket, sonst fehlen einem frisch
+        # geflashten Geraet die Bilder (Kompass-Hintergrund, Windpfeil) aus data/img. -WithFs steuert
+        # hier nur noch die PNG->bin-Neukonvertierung; das Einpacken passiert unabhaengig davon.
+        Update-WebFlasherImgs -BuildDir $buildDir -ImgsDir $imgsDir -FwVersion $Version -IncludeFatfs $true
     }
 
     if ($WithFs -and -not $SkipUpload) {

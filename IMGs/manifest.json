@@ -21,6 +21,10 @@
                                      {
                                          "path":  "firmware.bin",
                                          "offset":  65536
+                                     },
+                                     {
+                                         "path":  "fatfs.bin",
+                                         "offset":  6356992
                                      }
                                  ]
                    }
