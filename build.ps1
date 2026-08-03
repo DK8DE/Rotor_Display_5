@@ -182,19 +182,23 @@ function Update-WebFlasherImgs {
         Write-Host '  WARNUNG: boot_app0.bin nicht gefunden — Manifest ohne OTA-Daten.' -ForegroundColor Yellow
     }
 
-    $parts = [System.Collections.Generic.List[object]]::new()
-    $parts.Add([ordered]@{ path = 'bootloader.bin'; offset = 0 })
-    $parts.Add([ordered]@{ path = 'partitions.bin'; offset = 32768 })   # 0x8000
+    # Basis-Teile: Bootloader/Partitionstabelle/OTA-Daten/Firmware - flashen NIE die FS-Partition,
+    # bestehende Einstellungen (config.json) und Bilder auf dem Geraet bleiben unangetastet.
+    $baseParts = [System.Collections.Generic.List[object]]::new()
+    $baseParts.Add([ordered]@{ path = 'bootloader.bin'; offset = 0 })
+    $baseParts.Add([ordered]@{ path = 'partitions.bin'; offset = 32768 })   # 0x8000
     if (Test-Path -LiteralPath $bootApp0Dst) {
-        $parts.Add([ordered]@{ path = 'boot_app0.bin'; offset = 57344 }) # 0xE000
+        $baseParts.Add([ordered]@{ path = 'boot_app0.bin'; offset = 57344 }) # 0xE000
     }
-    $parts.Add([ordered]@{ path = 'firmware.bin'; offset = 65536 })     # 0x10000
+    $baseParts.Add([ordered]@{ path = 'firmware.bin'; offset = 65536 })     # 0x10000
 
-    # FATFS-Image nur wenn explizit mit -WithFs gebaut (Offset laut partitions.csv: 0x610000)
+    # FATFS-Image (Bilder + config.json-Vorlage) fuer die Komplett-Installation bauen/kopieren
+    # (Offset laut partitions.csv: 0x610000). Wird NUR im Full-Install-Manifest referenziert.
+    $fatfsAvailable = $false
     if ($IncludeFatfs) {
         $fatSrc = Join-Path $BuildDir 'fatfs.bin'
         if (-not (Test-Path -LiteralPath $fatSrc)) {
-            Write-Host '  fatfs.bin fehlt — baue Filesystem-Image …' -ForegroundColor DarkGray
+            Write-Host '  fatfs.bin fehlt - baue Filesystem-Image ...' -ForegroundColor DarkGray
             & $pioExe run -t buildfs -e esp32-s3-viewe
             if ($LASTEXITCODE -ne 0) {
                 throw "buildfs fehlgeschlagen (Exit $LASTEXITCODE)"
@@ -202,30 +206,49 @@ function Update-WebFlasherImgs {
         }
         if (Test-Path -LiteralPath $fatSrc) {
             Copy-Item -LiteralPath $fatSrc -Destination (Join-Path $ImgsDir 'fatfs.bin') -Force
-            $parts.Add([ordered]@{ path = 'fatfs.bin'; offset = 6356992 }) # 0x610000
             Write-Host '  IMGs\fatfs.bin' -ForegroundColor DarkGray
+            $fatfsAvailable = $true
         }
         else {
-            Write-Host '  WARNUNG: fatfs.bin nicht erzeugt — Manifest ohne Filesystem.' -ForegroundColor Yellow
+            Write-Host '  WARNUNG: fatfs.bin nicht erzeugt - Komplett-Installation ohne Filesystem.' -ForegroundColor Yellow
         }
     }
 
-    $manifest = [ordered]@{
-        name                       = 'Rotor Display 5'
-        version                    = $FwVersion
-        new_install_prompt_erase   = $true
-        builds                     = @(
-            [ordered]@{
-                chipFamily = 'ESP32-S3'
-                parts      = @($parts.ToArray())
-            }
-        )
+    function New-WebFlasherManifest {
+        param([string]$Path, [string]$Name, [bool]$PromptErase, [object[]]$Parts)
+        $manifest = [ordered]@{
+            name                     = $Name
+            version                  = $FwVersion
+            new_install_prompt_erase = $PromptErase
+            builds                   = @(
+                [ordered]@{
+                    chipFamily = 'ESP32-S3'
+                    parts      = @($Parts)
+                }
+            )
+        }
+        $json = $manifest | ConvertTo-Json -Depth 6
+        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($Path, $json, $utf8NoBom)
     }
-    $manifestPath = Join-Path $ImgsDir 'manifest.json'
-    $json = $manifest | ConvertTo-Json -Depth 6
-    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::WriteAllText($manifestPath, $json, $utf8NoBom)
-    Write-Host "  IMGs\manifest.json  (v$FwVersion)" -ForegroundColor DarkGray
+
+    # 1) Update (Standard): nur Bootloader/Partitionstabelle/Firmware - Dateisystem (Einstellungen,
+    #    Bilder) bleibt unveraendert, da diese Flash-Region gar nicht beschrieben wird.
+    $updateManifestPath = Join-Path $ImgsDir 'manifest.json'
+    New-WebFlasherManifest -Path $updateManifestPath -Name 'Rotor Display 5 (Update)' `
+        -PromptErase $false -Parts $baseParts.ToArray()
+    Write-Host "  IMGs\manifest.json  (v$FwVersion, Update - Einstellungen bleiben erhalten)" -ForegroundColor DarkGray
+
+    # 2) Komplett-Installation: zusaetzlich das Dateisystem-Image (Fabrik-Bilder + Default-Config) -
+    #    fuer neue/leere Geraete oder einen bewussten Reset. Ueberschreibt bestehende Einstellungen!
+    if ($fatfsAvailable) {
+        $fullParts = [System.Collections.Generic.List[object]]::new($baseParts)
+        $fullParts.Add([ordered]@{ path = 'fatfs.bin'; offset = 6356992 }) # 0x610000
+        $fullManifestPath = Join-Path $ImgsDir 'manifest-full-install.json'
+        New-WebFlasherManifest -Path $fullManifestPath -Name 'Rotor Display 5 (Komplett-Installation)' `
+            -PromptErase $true -Parts $fullParts.ToArray()
+        Write-Host "  IMGs\manifest-full-install.json  (v$FwVersion, Komplett - setzt Einstellungen zurueck)" -ForegroundColor DarkGray
+    }
 }
 
 try {

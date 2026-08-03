@@ -1,7 +1,7 @@
 {
-    "name":  "Rotor Display 5 (Update)",
+    "name":  "Rotor Display 5 (Komplett-Installation)",
     "version":  "1.3.0",
-    "new_install_prompt_erase":  false,
+    "new_install_prompt_erase":  true,
     "builds":  [
                    {
                        "chipFamily":  "ESP32-S3",
@@ -21,6 +21,10 @@
                                      {
                                          "path":  "firmware.bin",
                                          "offset":  65536
+                                     },
+                                     {
+                                         "path":  "fatfs.bin",
+                                         "offset":  6356992
                                      }
                                  ]
                    }

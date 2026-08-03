@@ -21,6 +21,18 @@ Firmware für ESP32-S3 bauen und flashen. Bilder für LVGL liegen auf der FAT-Pa
 - **Version:** siehe `include/firmware_version.h` (ein Blickwert wie bei [RotorTcpBridge](https://github.com/DK8DE/RotorTcpBridge) `rotortcpbridge/version.py`: Name, Version, Datum, Autor).
 - **Release:** `.\build.ps1 -Version "1.1"` setzt `FIRMWARE_APP_VERSION` und `FIRMWARE_APP_DATE` in `firmware_version.h`, danach wie gewohnt Build/Upload.
 - **Lizenz:** `LICENSE.txt` (Apache-2.0, identisch zur RotorTcpBridge-Vorgabe).
+- **RS485-Abfrage:** `GETCOVERSION` liefert die Version des Display-Controllers als ACK-Antwort (siehe `Info/RotorController_RS485.md`).
+
+## ESP Web Tools (`IMGs\`)
+
+Nach jedem `.\build.ps1`-Lauf liegt unter `IMGs\` ein fertiges Paket für browserbasiertes Flashen (z. B. via [ESP Web Tools](https://esphome.github.io/esp-web-tools/)). Es gibt **zwei** Manifeste für zwei unterschiedliche Zwecke:
+
+| Datei | Zweck | Dateisystem (Bilder/`config.json`) |
+|-------|-------|-------------------------------------|
+| `manifest.json` | **Update** eines bereits eingerichteten Geräts | wird **nicht** angefasst — bestehende Einstellungen und Bilder bleiben erhalten |
+| `manifest-full-install.json` | **Komplett-Installation** (neues/leeres Gerät oder bewusster Reset) | wird mitgeflasht (`fatfs.bin`) — setzt Einstellungen auf Werkszustand zurück, `new_install_prompt_erase = true` |
+
+`fatfs.bin` wird bei jedem Build automatisch erzeugt (`pio run -t buildfs`), falls es fehlt — unabhängig vom `-WithFs`-Schalter, der weiterhin nur die PNG→`.bin`-Neukonvertierung und den Live-`uploadfs` auf ein per USB angeschlossenes Gerät steuert.
 
 ## EEZ Studio und Bildnamen (`imgs` vs. `src/ui`)
 
