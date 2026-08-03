@@ -243,7 +243,12 @@ function Update-WebFlasherImgs {
     #    fuer neue/leere Geraete oder einen bewussten Reset. Ueberschreibt bestehende Einstellungen!
     if ($fatfsAvailable) {
         $fullParts = [System.Collections.Generic.List[object]]::new($baseParts)
-        $fullParts.Add([ordered]@{ path = 'fatfs.bin'; offset = 6356992 }) # 0x610000
+        # Partition "ffat" beginnt laut partitions.csv bei 0x610000, aber PlatformIOs FFat-Wear-Leveling
+        # reserviert die ersten 4096 Bytes der Partition fuer WL-Metadaten (siehe builder/main.py,
+        # fetch_fs_size(): FS_START += 4096 fuer filesystem == "fatfs"). Das eigentliche FAT-Image (auch
+        # 4096 Bytes kleiner gebaut) muss deshalb bei 0x611000 geschrieben werden, nicht bei 0x610000 -
+        # sonst findet FFat.begin() keinen gueltigen Header und formatiert die Partition leer neu.
+        $fullParts.Add([ordered]@{ path = 'fatfs.bin'; offset = 6361088 }) # 0x611000 (0x610000 + 4096)
         $fullManifestPath = Join-Path $ImgsDir 'manifest-full-install.json'
         New-WebFlasherManifest -Path $fullManifestPath -Name 'Rotor Display 5 (Komplett-Installation)' `
             -PromptErase $true -Parts $fullParts.ToArray()
