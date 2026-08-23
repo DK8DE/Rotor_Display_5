@@ -601,7 +601,10 @@ static float bus_deg_for_ui(float deg_norm, float deg_raw)
     if (deg_norm < 0.01f && deg_raw >= 359.5f) {
         return 360.0f;
     }
-    if (s_slave_referenced && deg_raw >= 0.0f && deg_raw <= 0.5f && deg_norm <= 0.5f) {
+    /* Eng um 0,0° halten (nur echter Restfehler, z. B. 0,0…0,05°) — NICHT bis 0,5°: sonst wird jede
+     * echte, angefahrene Position 0,1…0,4° faelschlich als Homing-Endlage (360°) angezeigt, obwohl
+     * der Rotor tatsaechlich dort steht (z. B. Ziel 0,3° oder 0,02°). */
+    if (s_slave_referenced && deg_raw >= 0.0f && deg_raw <= 0.05f && deg_norm <= 0.05f) {
         return 360.0f;
     }
     return deg_norm;

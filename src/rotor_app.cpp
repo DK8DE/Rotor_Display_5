@@ -578,7 +578,10 @@ static float bus_to_display_for_idx(float bus_deg_ui, int ant_1_to_3)
 {
     const float off = pwm_config_get_antoff_deg(ant_1_to_3);
     const float span = pwm_config_get_axis_span_deg();
-    if (span <= 360.5f && bus_deg_ui >= 359.5f) {
+    /* Eng um 360,0 (±0,05°) halten, NICHT ab 359,5° (das ist die 1°-Arc-Schwelle) — sonst wird jede
+     * echte Buslage von 359,5…359,99° hier faelschlich als exakt 360° behandelt (Anzeige springt vor
+     * der Ankunft schon auf 360, obwohl der Rotor z. B. noch bei 359,6° steht). */
+    if (span <= 360.5f && bus_deg_ui >= 359.95f) {
         if (std::fabs(static_cast<double>(off)) < 1e-6) {
             return 360.0f;
         }
@@ -598,7 +601,10 @@ static float display_to_bus_for_idx(float display_deg, int ant_1_to_3)
 {
     const float off = pwm_config_get_antoff_deg(ant_1_to_3);
     const float span = pwm_config_get_axis_span_deg();
-    if (span <= 360.5f && display_deg >= 359.5f) {
+    /* Eng um 360,0 (±0,05°) halten, NICHT ab 359,5° (das ist die 1°-Arc-Schwelle) — sonst wird ein
+     * eingegebenes Ziel von 359,5…359,9° hier faelschlich als exakt 360° umgerechnet und der Rotor
+     * faehrt/zeigt 360° statt des tatsaechlich gewuenschten Winkels an. */
+    if (span <= 360.5f && display_deg >= 359.95f) {
         if (std::fabs(static_cast<double>(off)) < 1e-6f) {
             return 360.0f;
         }
@@ -783,8 +789,11 @@ static void fmt_taget_from_wrapped_tenths(char *buf, size_t n, int tenths)
 static void fmt_taget_from_display_deg(char *buf, size_t n, float deg)
 {
     const float span = pwm_config_get_axis_span_deg();
-    /* Bei Span 360: Homing-Endlage 360,0 anzeigen. Bei Span>360 (Typ 3) 361…span darstellbar. */
-    if (span <= 360.5f && deg >= 359.5f) {
+    /* Bei Span 360: Homing-Endlage 360,0 anzeigen (wrap_tenths_deg würde exakt 360,0 sonst auf 0,0
+     * zurückfalten). Schwelle eng um 360,0 (±0,05°) halten — nicht wie beim 1°-Arc (deg_to_arc_value)
+     * bei 359,5°: sonst zeigt jeder Zehntelwert 359,5…359,9 fälschlich schon 360,0 statt des
+     * tatsächlich angefahrenen Winkels. Bei Span>360 (Typ 3) ist 361…span ohnehin normal darstellbar. */
+    if (span <= 360.5f && deg >= 359.95f) {
         snprintf(buf, n, "360,0");
         return;
     }
