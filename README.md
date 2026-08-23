@@ -34,6 +34,21 @@ Nach jedem `.\build.ps1`-Lauf liegt unter `IMGs\` ein fertiges Paket für browse
 
 `fatfs.bin` wird bei jedem Build automatisch erzeugt (`pio run -t buildfs`), falls es fehlt — unabhängig vom `-WithFs`-Schalter, der weiterhin nur die PNG→`.bin`-Neukonvertierung und den Live-`uploadfs` auf ein per USB angeschlossenes Gerät steuert.
 
+## GitHub Actions (automatischer Build)
+
+`.github/workflows/build-firmware.yml` baut die Firmware bei jedem Push/PR auf `main` (und manuell über
+„Run workflow“) auf einem Windows-Runner über `.\build.ps1 -SkipUpload` — identisch zum lokalen Build,
+inklusive `IMGs\` (ESP Web Tools: `manifest.json`, `manifest-full-install.json`, `fatfs.bin`, …). Das
+Ergebnis liegt danach als Artefakt „esp-web-tools-images“ am Workflow-Lauf.
+
+Bei einem Versions-Tag (z. B. `v1.3.0`) wird zusätzlich automatisch ein **GitHub-Release** mit allen
+Dateien aus `IMGs\` angelegt:
+
+```bash
+git tag v1.3.0
+git push origin v1.3.0
+```
+
 ## EEZ Studio und Bildnamen (`imgs` vs. `src/ui`)
 
 - EEZ Studio kann beim Export oder Build LVGL-Bilder als **`*.bin`** unter **`src/ui`** ablegen. **Diese von EEZ erzeugten `.bin`-Dateien haben für dieses Projekt kein passendes Format** (andere LVGL-/Speicher-Erwartung als unsere FAT-Ladepfade). Sie werden daher **entfernt** und **nicht** verwendet.

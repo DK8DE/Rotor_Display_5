@@ -1,0 +1,79 @@
+name: Firmware Build
+
+# Baut die Firmware (PlatformIO, esp32-s3-viewe) ueber das vorhandene build.ps1 (-SkipUpload)
+# und erzeugt dabei automatisch das ESP-Web-Tools-Paket unter IMGs/ (bootloader.bin,
+# partitions.bin, boot_app0.bin, firmware.bin, fatfs.bin, manifest.json,
+# manifest-full-install.json). Ergebnis wird als Artefakt hochgeladen; bei einem
+# Versions-Tag (z. B. v1.3.0) zusaetzlich als GitHub-Release veroeffentlicht.
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+concurrency:
+  group: firmware-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Firmware + IMGs bauen
+    runs-on: windows-latest
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: PlatformIO-Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: PlatformIO installieren
+        run: pip install -U platformio
+
+      - name: Firmware bauen und IMGs (ESP Web Tools) erzeugen
+        shell: pwsh
+        run: .\build.ps1 -SkipUpload
+
+      - name: IMGs als Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp-web-tools-images
+          path: IMGs/
+          if-no-files-found: error
+
+  release:
+    name: GitHub-Release veroeffentlichen
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: IMGs-Artefakt herunterladen
+        uses: actions/download-artifact@v4
+        with:
+          name: esp-web-tools-images
+          path: IMGs
+
+      - name: Release erstellen und Dateien anhaengen
+        uses: softprops/action-gh-release@v2
+        with:
+          files: IMGs/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
