@@ -16,6 +16,8 @@ Dort sind Verbindung (seriell/TCP), Protokoll, Kompass, Karte und Schnittstellen
 
 Firmware für ESP32-S3 bauen und flashen. Bilder für LVGL liegen auf der FAT-Partition (über `uploadfs`); Quellen sind PNGs im Ordner `imgs/`.
 
+**Hardware (aktuell):** NeoPixel-Ring direkt an **GPIO 39**, Lautsprecher (PWM) an **GPIO 40**, RS485 über UART **GPIO 43/44** mit selbstschaltendem Transceiver (kein DE/RE-Pin). Lautstärke (`SETLSL`), Pieps-Frequenz (`SETCONFRQ`) und Ring-Helligkeit (`SETCONLEDP`) laufen weiter über den RS485-Bus und `config.json`.
+
 ## Version und Lizenz
 
 - **Version:** siehe `include/firmware_version.h` (ein Blickwert wie bei [RotorTcpBridge](https://github.com/DK8DE/RotorTcpBridge) `rotortcpbridge/version.py`: Name, Version, Datum, Autor).

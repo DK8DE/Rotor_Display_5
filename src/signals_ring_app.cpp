@@ -28,8 +28,7 @@
 #define SIGNALS_RING_MAX_LEDS 32u
 #endif
 
-/** Voll-Refresh-Intervall: sendet auch ohne Änderung einmal den kompletten Frame (Selbstheilung,
- * da RX = -1 keine Rückmeldung liefert und einzelne Bytes verloren gehen könnten). */
+/** Voll-Refresh-Intervall: sendet auch ohne Änderung einmal den kompletten Frame (Selbstheilung). */
 #ifndef SIGNALS_RING_HEARTBEAT_MS
 #define SIGNALS_RING_HEARTBEAT_MS 2000u
 #endif
@@ -39,8 +38,8 @@ static uint8_t s_n = 16;
 static uint32_t s_last_draw_ms = 0;
 static uint32_t s_pause_until_ms = 0;
 
-/* Frame-Puffer: erst komplett aufbauen, dann nur geänderte Pixel senden — sonst flutet der 45-ms-Redraw
- * (16×"P"+"W" ≈ 20 ms @115200) den TX-only-ATtiny und lässt LED 0 (erste in der Kette) glitchen. */
+/* Frame-Puffer: erst komplett aufbauen, dann nur geänderte Pixel + einmal show() —
+ * vermeidet unnötige NeoPixel-RMT-Transfers bei unverändertem Muster. */
 static uint8_t s_cur_r[SIGNALS_RING_MAX_LEDS];
 static uint8_t s_cur_g[SIGNALS_RING_MAX_LEDS];
 static uint8_t s_cur_b[SIGNALS_RING_MAX_LEDS];

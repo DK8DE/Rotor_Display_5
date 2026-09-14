@@ -1,5 +1,5 @@
 /**
- * USB-Serial (CDC) <-> UART-Transparent mit RS485-Richtungssteuerung.
+ * USB-Serial (CDC) <-> UART-Transparent (RS485, selbstschaltender Transceiver — kein DE/RE).
  * Modular gehalten; main ruft nur begin() und poll() auf.
  */
 #pragma once
@@ -16,7 +16,7 @@ enum class BridgeMode : uint8_t {
 /** UART-Baud (USB und HW identisch). */
 void set_baud(uint32_t baud);
 
-/** UART2 auf RX/TX-Pins, RS485-Dir-Pin; USB-Serial muss bereits initialisiert sein. */
+/** UART2 auf RX/TX-Pins; USB-Serial muss bereits initialisiert sein. */
 void begin();
 
 /** Wartung der Bridge-Modus-Zeitfenster; die Datenpfade laufen in eigenen Tasks. */
@@ -35,7 +35,7 @@ void uart_unlock();
 
 /**
  * RS485 senden. Intern wird in die zentrale RS485-TX-Queue gelegt; ein einzelner
- * TX-Task übernimmt Bus-Idle, DE/RE-Umschaltung und UART-Write.
+ * TX-Task übernimmt Bus-Idle und UART-Write (kein DE/RE — Transceiver schaltet selbst).
  */
 void hw_send(const uint8_t *data, size_t len);
 

@@ -68,7 +68,7 @@ void pwm_config_set_axis_max_deg_raw(float raw_from_bus);
  */
 float pwm_config_get_axis_span_deg(void);
 
-/** UI-Touch-Pieps (Signals/ATtiny): Frequenz Hz (200…4000), Lautstärke 0…50 */
+/** UI-Touch-Pieps (Signals/Speaker GPIO40): Frequenz Hz (200…4000), Lautstärke 0…50 */
 uint16_t pwm_config_get_touch_beep_freq_hz(void);
 void pwm_config_set_touch_beep_freq_hz(uint16_t hz);
 uint8_t pwm_config_get_touch_beep_vol(void);

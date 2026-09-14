@@ -1,5 +1,6 @@
 /**
  * Transparente Bruecke: USB Serial <-> HW-UART (RS485, Halbduplex).
+ * Transceiver schaltet Senden/Empfang selbst — kein DE/RE-GPIO.
  *
  * Architektur:
  * - USB-RX liest komplette #...$ Frames vom PC und legt sie in die RS485-TX-Queue.
@@ -26,10 +27,6 @@ namespace serial_bridge {
 static constexpr int kPinUartTx = 43;
 /** RX vom RS485-Wandler */
 static constexpr int kPinUartRx = 44;
-/** DE/RE bzw. Sende-/Empfangsumschaltung (typ. MAX485: HIGH = Senden aktiv) */
-static constexpr int kPinRs485Dir = 39;
-/** true: Dir-Pin HIGH = Senden; false: invertierte Ansteuerung */
-static constexpr bool kDirTransmitLevel = true;
 
 /** Max. RS485-Telegramm inkl. '$' */
 static constexpr size_t kFrameMax = 320;
@@ -44,7 +41,7 @@ static constexpr size_t kUsbTxQueueDepth = 96;
  * und meldet sporadisch Verbindungstimeout trotz korrekter Busantworten. */
 static constexpr size_t kSniffQueueDepth = 192;
 
-/** Wartezeit nach letztem gesendeten Byte, bevor wieder Empfang (Bus-Freigabe). */
+/** Kurze Pause nach TX-Flush (Bus-Echo / Transceiver-Umschaltung abklingen lassen). */
 static constexpr uint32_t kTurnaroundMicros = 250;
 /** Mindest-Stille vor PC- oder Controller-Frames. */
 static constexpr uint32_t kBusIdleUsPc = 1400;
@@ -90,16 +87,6 @@ static TaskHandle_t s_task_sniffer = nullptr;
 static volatile uint32_t s_last_bus_activity_us = 0;
 
 void set_baud(uint32_t baud) { s_baud = baud; }
-
-static inline void dir_receive()
-{
-    digitalWrite(kPinRs485Dir, kDirTransmitLevel ? LOW : HIGH);
-}
-
-static inline void dir_transmit()
-{
-    digitalWrite(kPinRs485Dir, kDirTransmitLevel ? HIGH : LOW);
-}
 
 void uart_lock()
 {
@@ -272,13 +259,11 @@ static void send_rs485_frame(const TxFrame &f)
     }
 
     uart_lock();
-    dir_transmit();
     s_hw->write(f.data, f.len);
     s_hw->flush();
     if (kTurnaroundMicros != 0) {
         delayMicroseconds(kTurnaroundMicros);
     }
-    dir_receive();
     uart_unlock();
     s_last_bus_activity_us = micros();
 
@@ -468,9 +453,6 @@ void begin()
     if (!s_sniff_q) {
         s_sniff_q = xQueueCreate(kSniffQueueDepth, sizeof(IoChunk));
     }
-
-    pinMode(kPinRs485Dir, OUTPUT);
-    dir_receive();
 
     s_hw->setRxBufferSize(4096);
     s_hw->setTxBufferSize(2048);

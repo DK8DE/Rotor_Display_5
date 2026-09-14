@@ -5,7 +5,7 @@
 #ifdef __cplusplus
 class Signals;
 
-/** ATtiny-Tonausgabe (Serial1); vor erstem Touch aufrufen. */
+/** Signals (NeoPixel GPIO39 / Speaker PWM GPIO40); vor erstem Touch aufrufen. */
 void touch_feedback_set_signals(Signals *sig);
 
 /**

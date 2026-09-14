@@ -1,15 +1,14 @@
 {
   "name": "Signals",
-  "version": "1.0.0",
-  "description": "ESP32 library to control an ATtiny receiver via UART (NeoPixel + speaker) using a simple ASCII protocol.",
+  "version": "2.0.0",
+  "description": "ESP32 library for direct NeoPixel ring + PWM speaker control (GPIO).",
   "keywords": [
-    "uart",
-    "serial",
     "neopixel",
     "ws2812",
     "speaker",
     "pwm",
-    "attiny"
+    "ledc",
+    "esp32"
   ],
   "repository": {
     "type": "git",
@@ -31,5 +30,8 @@
   ],
   "headers": [
     "Signals.h"
-  ]
+  ],
+  "dependencies": {
+    "adafruit/Adafruit NeoPixel": "^1.12.0"
+  }
 }

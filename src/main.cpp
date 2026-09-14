@@ -20,21 +20,19 @@
 #include "touch_feedback.h"
 #include "firmware_version.h"
 
-/** Signals → ATtiny: nur TX, wie im SignalsDemo (Serial1). */
-static constexpr int8_t SIGNALS_TX_PIN = 40;
-static constexpr int8_t SIGNALS_RX_PIN = -1;
-static constexpr uint32_t SIGNALS_BAUD = 115200;
-/** NeoPixel-Ring am Empfänger (wie SignalsDemo: 16 LEDs). */
+/** NeoPixel-Ring GPIO39, Lautsprecher PWM GPIO40 (direkt, ohne ATtiny). */
+static constexpr int8_t NEOPIXEL_PIN = 39;
+static constexpr int8_t SPEAKER_PIN = 40;
 static constexpr uint8_t SIGNALS_NUM_LEDS = 16;
 
-static Signals g_signals(Serial1);
+static Signals g_signals;
 static volatile bool s_boot_welcome_active = false;
 static TaskHandle_t s_boot_welcome_task = nullptr;
 
 /** Kurze Boot-Melodie + einmal blaues Kreislauflicht (nur beim Start). */
 static void signals_play_boot_welcome()
 {
-    g_signals.begin(SIGNALS_TX_PIN, SIGNALS_RX_PIN, SIGNALS_BAUD);
+    g_signals.begin(SIGNALS_NUM_LEDS, NEOPIXEL_PIN, SPEAKER_PIN);
     g_signals.clear();
     g_signals.stopTone();
     delay(80);
@@ -54,6 +52,7 @@ static void signals_play_boot_welcome()
     for (size_t i = 0; i < sizeof(notes) / sizeof(notes[0]); i++) {
         g_signals.tone(notes[i].freq, 18, notes[i].ms);
         delay(notes[i].ms + 35);
+        g_signals.service();
     }
     g_signals.stopTone();
     /* Ring-App arbeitet mit AutoShow=false + explizitem show(); true verursacht sichtbares Flackern,
@@ -271,7 +270,7 @@ void setup()
     }
     pwm_config_load();
 
-    Serial.println("Signals boot (TX GPIO40) …");
+    Serial.println("Signals boot (NeoPixel GPIO39, Speaker GPIO40) …");
     signals_start_boot_welcome_async();
     touch_feedback_set_signals(&g_signals);
     Serial.println("Initializing board");
@@ -364,6 +363,7 @@ void loop()
     rotor_rs485_loop();
     rotor_app_weather_ui_poll();
     rotor_error_app_loop(millis());
+    g_signals.service();
     if (!s_boot_welcome_active) {
         signals_ring_app_loop(millis());
     }

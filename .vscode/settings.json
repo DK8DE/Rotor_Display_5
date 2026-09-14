@@ -10,5 +10,6 @@
     "--compile-commands-dir=d:/Rotor/Rotor_Display_5/.cache/clangd"
   ],
   "clangd.fallbackFlags": [],
-  "cmake.sourceDirectory": "D:/Rotor/Rotor_Display_5/lib/ESP32_Display_Panel"
+  "cmake.sourceDirectory": "D:/Rotor/Rotor_Display_5/lib/ESP32_Display_Panel",
+  "clangd.path": "C:\\Users\\DK8DE\\.platformio\\packages\\tool-clangd-esp\\bin\\clangd.exe"
 }
