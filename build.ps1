@@ -129,7 +129,9 @@ function Invoke-Step {
     }
 }
 
-# IMGs\ fuer ESP Web Tools / espwebtool: aktuelle Images + Partitionstabelle + manifest.json
+# IMGs\ fuer ESP Web Tools: zwei getrennte Pakete
+#   IMGs\update\         - Firmware-Update ohne Dateisystem (Einstellungen/Bilder bleiben)
+#   IMGs\full-install\   - Komplett-Installation inkl. fatfs.bin (Bilder + Default-Config)
 function Update-WebFlasherImgs {
     param(
         [string]$BuildDir,
@@ -145,74 +147,57 @@ function Update-WebFlasherImgs {
     if (Test-Path -LiteralPath $ImgsDir) {
         Remove-Item -LiteralPath $ImgsDir -Recurse -Force
     }
-    New-Item -ItemType Directory -Path $ImgsDir -Force | Out-Null
+    $updateDir = Join-Path $ImgsDir 'update'
+    $fullDir = Join-Path $ImgsDir 'full-install'
+    New-Item -ItemType Directory -Path $updateDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $fullDir -Force | Out-Null
 
-    $required = @(
-        @{ Src = (Join-Path $BuildDir 'bootloader.bin'); Dst = 'bootloader.bin' },
-        @{ Src = (Join-Path $BuildDir 'partitions.bin'); Dst = 'partitions.bin' },
-        @{ Src = (Join-Path $BuildDir 'firmware.bin');   Dst = 'firmware.bin' }
-    )
-    foreach ($f in $required) {
-        if (-not (Test-Path -LiteralPath $f.Src)) {
-            throw "Fehlt nach Build: $($f.Src)"
+    $binNames = @('bootloader.bin', 'partitions.bin', 'firmware.bin')
+    foreach ($name in $binNames) {
+        $src = Join-Path $BuildDir $name
+        if (-not (Test-Path -LiteralPath $src)) {
+            throw "Fehlt nach Build: $src"
         }
-        Copy-Item -LiteralPath $f.Src -Destination (Join-Path $ImgsDir $f.Dst) -Force
-        Write-Host "  IMGs\$($f.Dst)" -ForegroundColor DarkGray
+        Copy-Item -LiteralPath $src -Destination (Join-Path $updateDir $name) -Force
+        Copy-Item -LiteralPath $src -Destination (Join-Path $fullDir $name) -Force
+        Write-Host "  IMGs\...\$name" -ForegroundColor DarkGray
     }
 
-    # Lesbare Partitionstabelle (Quelle im Repo)
     $partCsv = Join-Path $PSScriptRoot 'partitions.csv'
     if (Test-Path -LiteralPath $partCsv) {
-        Copy-Item -LiteralPath $partCsv -Destination (Join-Path $ImgsDir 'partitions.csv') -Force
-        Write-Host '  IMGs\partitions.csv' -ForegroundColor DarkGray
+        Copy-Item -LiteralPath $partCsv -Destination (Join-Path $updateDir 'partitions.csv') -Force
+        Copy-Item -LiteralPath $partCsv -Destination (Join-Path $fullDir 'partitions.csv') -Force
+        Write-Host '  IMGs\...\partitions.csv' -ForegroundColor DarkGray
     }
 
-    # boot_app0 (OTA-Daten) — Standard Arduino-ESP32, Offset 0xE000
-    $bootApp0Dst = Join-Path $ImgsDir 'boot_app0.bin'
-    $bootApp0Candidates = @(
-        (Join-Path $BuildDir 'boot_app0.bin'),
-        (Join-Path $env:USERPROFILE '.platformio\packages\framework-arduinoespressif32\tools\partitions\boot_app0.bin')
-    )
+    # boot_app0 (OTA-Daten) - Standard Arduino-ESP32, Offset 0xE000
+    $bootApp0Candidates = [System.Collections.Generic.List[string]]::new()
+    $bootApp0Candidates.Add((Join-Path $BuildDir 'boot_app0.bin'))
+    if ($env:USERPROFILE) {
+        $bootApp0Candidates.Add((Join-Path $env:USERPROFILE '.platformio\packages\framework-arduinoespressif32\tools\partitions\boot_app0.bin'))
+    }
+    if ($env:HOME) {
+        $bootApp0Candidates.Add((Join-Path $env:HOME '.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin'))
+    }
     $bootApp0Src = $bootApp0Candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    $haveBootApp0 = $false
     if ($bootApp0Src) {
-        Copy-Item -LiteralPath $bootApp0Src -Destination $bootApp0Dst -Force
-        Write-Host '  IMGs\boot_app0.bin' -ForegroundColor DarkGray
+        Copy-Item -LiteralPath $bootApp0Src -Destination (Join-Path $updateDir 'boot_app0.bin') -Force
+        Copy-Item -LiteralPath $bootApp0Src -Destination (Join-Path $fullDir 'boot_app0.bin') -Force
+        Write-Host '  IMGs\...\boot_app0.bin' -ForegroundColor DarkGray
+        $haveBootApp0 = $true
     }
     else {
-        Write-Host '  WARNUNG: boot_app0.bin nicht gefunden — Manifest ohne OTA-Daten.' -ForegroundColor Yellow
+        Write-Host '  WARNUNG: boot_app0.bin nicht gefunden - Manifest ohne OTA-Daten.' -ForegroundColor Yellow
     }
 
-    # Basis-Teile: Bootloader/Partitionstabelle/OTA-Daten/Firmware - flashen NIE die FS-Partition,
-    # bestehende Einstellungen (config.json) und Bilder auf dem Geraet bleiben unangetastet.
     $baseParts = [System.Collections.Generic.List[object]]::new()
     $baseParts.Add([ordered]@{ path = 'bootloader.bin'; offset = 0 })
     $baseParts.Add([ordered]@{ path = 'partitions.bin'; offset = 32768 })   # 0x8000
-    if (Test-Path -LiteralPath $bootApp0Dst) {
+    if ($haveBootApp0) {
         $baseParts.Add([ordered]@{ path = 'boot_app0.bin'; offset = 57344 }) # 0xE000
     }
     $baseParts.Add([ordered]@{ path = 'firmware.bin'; offset = 65536 })     # 0x10000
-
-    # FATFS-Image (Bilder + config.json-Vorlage) fuer die Komplett-Installation bauen/kopieren
-    # (Offset laut partitions.csv: 0x610000). Wird NUR im Full-Install-Manifest referenziert.
-    $fatfsAvailable = $false
-    if ($IncludeFatfs) {
-        $fatSrc = Join-Path $BuildDir 'fatfs.bin'
-        if (-not (Test-Path -LiteralPath $fatSrc)) {
-            Write-Host '  fatfs.bin fehlt - baue Filesystem-Image ...' -ForegroundColor DarkGray
-            & $pioExe run -t buildfs -e esp32-s3-viewe
-            if ($LASTEXITCODE -ne 0) {
-                throw "buildfs fehlgeschlagen (Exit $LASTEXITCODE)"
-            }
-        }
-        if (Test-Path -LiteralPath $fatSrc) {
-            Copy-Item -LiteralPath $fatSrc -Destination (Join-Path $ImgsDir 'fatfs.bin') -Force
-            Write-Host '  IMGs\fatfs.bin' -ForegroundColor DarkGray
-            $fatfsAvailable = $true
-        }
-        else {
-            Write-Host '  WARNUNG: fatfs.bin nicht erzeugt - Komplett-Installation ohne Filesystem.' -ForegroundColor Yellow
-        }
-    }
 
     function New-WebFlasherManifest {
         param([string]$Path, [string]$Name, [bool]$PromptErase, [object[]]$Parts)
@@ -232,27 +217,40 @@ function Update-WebFlasherImgs {
         [System.IO.File]::WriteAllText($Path, $json, $utf8NoBom)
     }
 
-    # 1) Update (Standard): nur Bootloader/Partitionstabelle/Firmware - Dateisystem (Einstellungen,
-    #    Bilder) bleibt unveraendert, da diese Flash-Region gar nicht beschrieben wird.
-    $updateManifestPath = Join-Path $ImgsDir 'manifest.json'
-    New-WebFlasherManifest -Path $updateManifestPath -Name 'Rotor Display 5 (Update)' `
-        -PromptErase $false -Parts $baseParts.ToArray()
-    Write-Host "  IMGs\manifest.json  (v$FwVersion, Update - Einstellungen bleiben erhalten)" -ForegroundColor DarkGray
+    # 1) Update-Paket: ohne fatfs - Einstellungen/Bilder auf dem Geraet bleiben erhalten
+    New-WebFlasherManifest -Path (Join-Path $updateDir 'manifest.json') `
+        -Name 'Rotor Display 5 (Update)' -PromptErase $false -Parts $baseParts.ToArray()
+    Write-Host "  IMGs\update\manifest.json  (v$FwVersion, ohne Dateisystem)" -ForegroundColor DarkGray
 
-    # 2) Komplett-Installation: zusaetzlich das Dateisystem-Image (Fabrik-Bilder + Default-Config) -
-    #    fuer neue/leere Geraete oder einen bewussten Reset. Ueberschreibt bestehende Einstellungen!
-    if ($fatfsAvailable) {
-        $fullParts = [System.Collections.Generic.List[object]]::new($baseParts)
-        # Partition "ffat" beginnt laut partitions.csv bei 0x610000, aber PlatformIOs FFat-Wear-Leveling
-        # reserviert die ersten 4096 Bytes der Partition fuer WL-Metadaten (siehe builder/main.py,
-        # fetch_fs_size(): FS_START += 4096 fuer filesystem == "fatfs"). Das eigentliche FAT-Image (auch
-        # 4096 Bytes kleiner gebaut) muss deshalb bei 0x611000 geschrieben werden, nicht bei 0x610000 -
-        # sonst findet FFat.begin() keinen gueltigen Header und formatiert die Partition leer neu.
-        $fullParts.Add([ordered]@{ path = 'fatfs.bin'; offset = 6361088 }) # 0x611000 (0x610000 + 4096)
-        $fullManifestPath = Join-Path $ImgsDir 'manifest-full-install.json'
-        New-WebFlasherManifest -Path $fullManifestPath -Name 'Rotor Display 5 (Komplett-Installation)' `
-            -PromptErase $true -Parts $fullParts.ToArray()
-        Write-Host "  IMGs\manifest-full-install.json  (v$FwVersion, Komplett - setzt Einstellungen zurueck)" -ForegroundColor DarkGray
+    # 2) Komplett-Installation inkl. FATFS (Bilder + config.json-Vorlage)
+    if ($IncludeFatfs) {
+        $fatSrc = Join-Path $BuildDir 'fatfs.bin'
+        if (-not (Test-Path -LiteralPath $fatSrc)) {
+            Write-Host '  fatfs.bin fehlt - baue Filesystem-Image ...' -ForegroundColor DarkGray
+            & $pioExe run -t buildfs -e esp32-s3-viewe
+            if ($LASTEXITCODE -ne 0) {
+                throw "buildfs fehlgeschlagen (Exit $LASTEXITCODE)"
+            }
+        }
+        if (Test-Path -LiteralPath $fatSrc) {
+            Copy-Item -LiteralPath $fatSrc -Destination (Join-Path $fullDir 'fatfs.bin') -Force
+            Write-Host '  IMGs\full-install\fatfs.bin' -ForegroundColor DarkGray
+
+            $fullParts = [System.Collections.Generic.List[object]]::new($baseParts)
+            # pioarduino/Arduino-ESP32 3.x: buildfs liefert ein WL-gewrapptes Image
+            # [dummy:4096][FAT][state…] — gehoert an den Partitionanfang 0x610000 (nicht +4096).
+            $fullParts.Add([ordered]@{ path = 'fatfs.bin'; offset = 6356992 }) # 0x610000
+            New-WebFlasherManifest -Path (Join-Path $fullDir 'manifest.json') `
+                -Name 'Rotor Display 5 (Komplett-Installation)' -PromptErase $true -Parts $fullParts.ToArray()
+            Write-Host "  IMGs\full-install\manifest.json  (v$FwVersion, inkl. Dateisystem)" -ForegroundColor DarkGray
+        }
+        else {
+            Write-Host '  WARNUNG: fatfs.bin nicht erzeugt - nur Update-Paket vorhanden.' -ForegroundColor Yellow
+            Remove-Item -LiteralPath $fullDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    else {
+        Remove-Item -LiteralPath $fullDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

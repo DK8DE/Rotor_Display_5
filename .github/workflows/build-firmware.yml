@@ -1,18 +1,24 @@
 name: Firmware Build
 
-# Baut die Firmware (PlatformIO, esp32-s3-viewe) ueber das vorhandene build.ps1 (-SkipUpload)
-# und erzeugt dabei automatisch das ESP-Web-Tools-Paket unter IMGs/ (bootloader.bin,
-# partitions.bin, boot_app0.bin, firmware.bin, fatfs.bin, manifest.json,
-# manifest-full-install.json). Ergebnis wird als Artefakt hochgeladen; bei einem
-# Versions-Tag (z. B. v1.3.0) zusaetzlich als GitHub-Release veroeffentlicht.
+# Push/PR auf main: immer Firmware + Web-Flasher-Pakete bauen.
+# Release: nur wenn sich FIRMWARE_APP_VERSION in include/firmware_version.h aendert
+# (oder manuell per workflow_dispatch mit create_release=true).
+#
+# Zwei Artefakte:
+#   webflasher-update        - ohne Dateisystem (normales Update)
+#   webflasher-full-install  - inkl. fatfs.bin (Komplett-Installation)
 
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*.*.*' ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'GitHub-Release aus aktueller FIRMWARE_APP_VERSION erzeugen'
+        type: boolean
+        default: false
 
 concurrency:
   group: firmware-build-${{ github.ref }}
@@ -22,12 +28,17 @@ jobs:
   build:
     name: Firmware + IMGs bauen
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      create_release: ${{ steps.ver.outputs.create_release }}
     steps:
       - name: Repository auschecken
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
 
       - name: Python einrichten
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -45,35 +56,100 @@ jobs:
       - name: PlatformIO installieren
         run: pip install -U platformio
 
-      - name: Firmware bauen und IMGs (ESP Web Tools) erzeugen
+      - name: Firmware bauen und Web-Flasher-Pakete erzeugen
         shell: pwsh
         run: .\build.ps1 -SkipUpload
 
-      - name: IMGs als Artefakt hochladen
+      - name: Version und Release-Bedingung ermitteln
+        id: ver
+        shell: pwsh
+        run: |
+          $verFile = 'include/firmware_version.h'
+          $content = Get-Content -LiteralPath $verFile -Raw -Encoding UTF8
+          $m = [regex]::Match($content, 'FIRMWARE_APP_VERSION\s+"([^"]+)"')
+          if (-not $m.Success) { throw 'FIRMWARE_APP_VERSION nicht gefunden' }
+          $version = $m.Groups[1].Value
+          Write-Host "Aktuelle Version: $version"
+
+          $createRelease = 'false'
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch' -and '${{ inputs.create_release }}' -eq 'true') {
+            $createRelease = 'true'
+            Write-Host 'Release: manuell angefordert (workflow_dispatch)'
+          }
+          elseif ('${{ github.event_name }}' -eq 'push' -and '${{ github.ref }}' -eq 'refs/heads/main') {
+            $prev = ''
+            try {
+              $prev = git show 'HEAD^:include/firmware_version.h' 2>$null
+            } catch { }
+            if ($prev) {
+              $pm = [regex]::Match($prev, 'FIRMWARE_APP_VERSION\s+"([^"]+)"')
+              $prevVer = if ($pm.Success) { $pm.Groups[1].Value } else { '' }
+              Write-Host "Vorherige Version: $prevVer"
+              if ($prevVer -ne '' -and $prevVer -ne $version) {
+                $createRelease = 'true'
+                Write-Host "Release: Versionswechsel $prevVer -> $version"
+              } else {
+                Write-Host 'Release: nein (Version unveraendert)'
+              }
+            } else {
+              Write-Host 'Release: nein (kein Vorgaenger-Commit fuer Versionsvergleich)'
+            }
+          }
+
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "create_release=$createRelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Artefakt Update (ohne Dateisystem)
         uses: actions/upload-artifact@v4
         with:
-          name: esp-web-tools-images
-          path: IMGs/
+          name: webflasher-update
+          path: IMGs/update/
+          if-no-files-found: error
+
+      - name: Artefakt Komplett-Installation (inkl. Dateisystem)
+        uses: actions/upload-artifact@v4
+        with:
+          name: webflasher-full-install
+          path: IMGs/full-install/
           if-no-files-found: error
 
   release:
     name: GitHub-Release veroeffentlichen
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: needs.build.outputs.create_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: IMGs-Artefakt herunterladen
+      - name: Update-Paket herunterladen
         uses: actions/download-artifact@v4
         with:
-          name: esp-web-tools-images
-          path: IMGs
+          name: webflasher-update
+          path: release/update
 
-      - name: Release erstellen und Dateien anhaengen
+      - name: Full-Install-Paket herunterladen
+        uses: actions/download-artifact@v4
+        with:
+          name: webflasher-full-install
+          path: release/full-install
+
+      - name: ZIP-Archive fuer Release bauen
+        shell: bash
+        run: |
+          VER="${{ needs.build.outputs.version }}"
+          cd release
+          zip -r "Rotor_Display_5-${VER}-update.zip" update
+          zip -r "Rotor_Display_5-${VER}-full-install.zip" full-install
+          ls -la
+
+      - name: Release erstellen
         uses: softprops/action-gh-release@v2
         with:
-          files: IMGs/*
+          tag_name: v${{ needs.build.outputs.version }}
+          name: Rotor Display ${{ needs.build.outputs.version }}
           generate_release_notes: true
+          files: |
+            release/Rotor_Display_5-${{ needs.build.outputs.version }}-update.zip
+            release/Rotor_Display_5-${{ needs.build.outputs.version }}-full-install.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

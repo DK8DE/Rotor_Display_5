@@ -27,29 +27,23 @@ Firmware für ESP32-S3 bauen und flashen. Bilder für LVGL liegen auf der FAT-Pa
 
 ## ESP Web Tools (`IMGs\`)
 
-Nach jedem `.\build.ps1`-Lauf liegt unter `IMGs\` ein fertiges Paket für browserbasiertes Flashen (z. B. via [ESP Web Tools](https://esphome.github.io/esp-web-tools/)). Es gibt **zwei** Manifeste für zwei unterschiedliche Zwecke:
+Nach jedem `.\build.ps1`-Lauf liegen unter `IMGs\` **zwei getrennte Pakete** für [ESP Web Tools](https://esphome.github.io/esp-web-tools/):
 
-| Datei | Zweck | Dateisystem (Bilder/`config.json`) |
-|-------|-------|-------------------------------------|
-| `manifest.json` | **Update** eines bereits eingerichteten Geräts | wird **nicht** angefasst — bestehende Einstellungen und Bilder bleiben erhalten |
-| `manifest-full-install.json` | **Komplett-Installation** (neues/leeres Gerät oder bewusster Reset) | wird mitgeflasht (`fatfs.bin`) — setzt Einstellungen auf Werkszustand zurück, `new_install_prompt_erase = true` |
+| Ordner | Zweck | Dateisystem (Bilder/`config.json`) |
+|--------|-------|-------------------------------------|
+| `IMGs/update/` | **Update** eines bereits eingerichteten Geräts (`manifest.json`) | wird **nicht** mitgeflasht — Einstellungen und Bilder bleiben erhalten |
+| `IMGs/full-install/` | **Komplett-Installation** (`manifest.json` + `fatfs.bin`) | wird mitgeflasht — setzt Einstellungen auf Werkszustand zurück, `new_install_prompt_erase = true` |
 
-`fatfs.bin` wird bei jedem Build automatisch erzeugt (`pio run -t buildfs`), falls es fehlt — unabhängig vom `-WithFs`-Schalter, der weiterhin nur die PNG→`.bin`-Neukonvertierung und den Live-`uploadfs` auf ein per USB angeschlossenes Gerät steuert.
+`fatfs.bin` wird bei Bedarf automatisch erzeugt (`pio run -t buildfs`). `-WithFs` steuert weiterhin nur die PNG→`.bin`-Neukonvertierung und den Live-`uploadfs` per USB.
 
 ## GitHub Actions (automatischer Build)
 
-`.github/workflows/build-firmware.yml` baut die Firmware bei jedem Push/PR auf `main` (und manuell über
-„Run workflow“) auf einem Windows-Runner über `.\build.ps1 -SkipUpload` — identisch zum lokalen Build,
-inklusive `IMGs\` (ESP Web Tools: `manifest.json`, `manifest-full-install.json`, `fatfs.bin`, …). Das
-Ergebnis liegt danach als Artefakt „esp-web-tools-images“ am Workflow-Lauf.
+`.github/workflows/build-firmware.yml` baut bei jedem Push/PR auf `main` (und manuell) die Firmware über `.\build.ps1 -SkipUpload` und lädt zwei Artefakte hoch:
 
-Bei einem Versions-Tag (z. B. `v1.3.0`) wird zusätzlich automatisch ein **GitHub-Release** mit allen
-Dateien aus `IMGs\` angelegt:
+- **`webflasher-update`** — Firmware-Update ohne Dateisystem
+- **`webflasher-full-install`** — Komplett-Installation inkl. `fatfs.bin`
 
-```bash
-git tag v1.3.0
-git push origin v1.3.0
-```
+**Release:** Ändert sich `FIRMWARE_APP_VERSION` in `include/firmware_version.h` beim Push auf `main`, wird automatisch ein GitHub-Release `vX.Y.Z` mit beiden ZIP-Paketen erstellt. Ohne Versionswechsel nur Build + Artefakte. Manuell: „Run workflow“ mit Option *create_release*.
 
 ## EEZ Studio und Bildnamen (`imgs` vs. `src/ui`)
 
