@@ -1,6 +1,6 @@
 {
     "name":  "Rotor Display 5 (Update)",
-    "version":  "FS",
+    "version":  "1.4.2",
     "new_install_prompt_erase":  false,
     "builds":  [
                    {

@@ -1,7 +1,8 @@
 /**
  * Meldungen zu GETERR / async ERR; UI: meldetext, homing_led, Ring-Override in signals_ring_app.
- * Fehler bleiben bis Neustart, Ausnahme: Verbindungstimeout (10) — wird bei ACK_ERR:0 (GETERR)
- * zurückgesetzt, nicht bei beliebiger Slave-Zeile (ref=1 kann trotz Slave-Fehler sein).
+ * Fehler bleiben bis Neustart, Ausnahme: lokaler Verbindungstimeout (10) — wird bei wiederkehrendem
+ * Slave-Verkehr / ACK_ERR:0 zurückgesetzt. Vom Rotor per ERR/ACK_ERR gemeldetes 10 latched wie
+ * andere Fehler (Broadcast #rotor:255:ERR:10:…), damit es nicht sofort wieder verschwindet.
  */
 
 #include "rotor_error_app.h"
@@ -17,7 +18,7 @@
 #ifndef ROTOR_ERR_LED_BLINK_MS
 #define ROTOR_ERR_LED_BLINK_MS 400u
 #endif
-/* Sehr kurze Verbindungstimeout-Glitches (10) nicht sofort als roten Ring anzeigen. */
+/* Sehr kurze lokale Verbindungstimeout-Glitches (10) nicht sofort als roten Ring anzeigen. */
 #ifndef ROTOR_ERR10_RING_DELAY_MS
 #define ROTOR_ERR10_RING_DELAY_MS 900u
 #endif
@@ -28,6 +29,8 @@ static uint32_t s_led_blink_last_ms = 0;
 static bool s_led_blink_bright = true;
 /** Abwechselnd Fehlertext und Neustart-Hinweis (UI-String) pro Sekunde */
 static uint32_t s_meldetext_last_alternate_sec = UINT32_MAX;
+/** true = Code kam vom Rotor (ERR/ACK_ERR), nicht vom lokalen Verbindungs-Watchdog */
+static bool s_err_from_rotor = false;
 
 static const char *message_for_code(int code)
 {
@@ -58,8 +61,9 @@ static void apply_fault_meldetext_alternate(uint32_t now_ms)
     if (!objects.meldetext || s_err_code == 0) {
         return;
     }
-    /* Fehler 10: kein Wechsel zur Neustart-Zeile — Verbindung kann ohne Neustart wiederkehren */
-    if (s_err_code == 10) {
+    /* Lokaler Fehler 10: kein Wechsel zur Neustart-Zeile — Verbindung kann ohne Neustart wiederkehren.
+     * Rotor-gemeldetes 10: wie harte Fehler abwechselnd mit Neustart-Hinweis. */
+    if (s_err_code == 10 && !s_err_from_rotor) {
         lv_textarea_set_text(objects.meldetext, "Verbindungstimeout");
         return;
     }
@@ -122,8 +126,8 @@ static void apply_homing_led_fault(uint32_t now_ms)
     if (!objects.homing_led) {
         return;
     }
-    /* Harte Fehler: rot blinken. Code 10 (Boot-Timeout) ist quittierbar — Ref-LED folgt unten Grün/Rot. */
-    if (s_err_code != 0 && s_err_code != 10) {
+    /* Harte Fehler inkl. Rotor-ERR:10: rot blinken. Nur lokaler Watchdog-10 bleibt soft. */
+    if (rotor_error_app_is_fault_locked()) {
         if ((uint32_t)(now_ms - s_led_blink_last_ms) < ROTOR_ERR_LED_BLINK_MS) {
             return;
         }
@@ -151,6 +155,7 @@ void rotor_error_app_init(void)
 {
     s_err_code = 0;
     s_err_set_ms = 0;
+    s_err_from_rotor = false;
     s_led_blink_last_ms = 0;
     s_led_blink_bright = true;
     s_meldetext_last_alternate_sec = UINT32_MAX;
@@ -164,9 +169,20 @@ void rotor_error_app_set_error_code(int code)
     if (code < 0) {
         code = 0;
     }
-    /* Latch: Fehler bleibt bis Neustart — Ausnahme Verbindungstimeout (10) per Bus quittierbar */
-    if (code == 0 && s_err_code != 0 && s_err_code != 10) {
-        return;
+    /* Latch: Fehler bleibt bis Neustart — Ausnahme lokaler Verbindungstimeout (10) per Bus quittierbar.
+     * Vom Rotor gemeldetes 10 latched wie andere Codes (nur Neustart / explizit 0 wenn nicht from_rotor). */
+    if (code == 0) {
+        if (s_err_code != 0 && s_err_code != 10) {
+            return;
+        }
+        if (s_err_code == 10 && s_err_from_rotor) {
+            /* Rotor-ERR:10 nicht durch lokales set_error_code(0) loeschen — nur report_rotor(0). */
+            return;
+        }
+        s_err_from_rotor = false;
+    } else if (code == 10) {
+        /* Aufruf vom Watchdog / Boot-TEST: lokaler Soft-Timeout */
+        s_err_from_rotor = false;
     }
     if (s_err_code != code) {
         s_err_set_ms = millis();
@@ -180,9 +196,46 @@ void rotor_error_app_set_error_code(int code)
     lvgl_port_unlock();
 }
 
+void rotor_error_app_report_rotor_err(int code)
+{
+    if (code < 0) {
+        code = 0;
+    }
+    if (code == 0) {
+        /* ACK_ERR:0 — auch Rotor-Fehler 10 und Latch anderer Codes? Andere Codes bleiben bis Neustart.
+         * Nur 10 bzw. kein Fehler: quittieren. */
+        if (s_err_code != 0 && s_err_code != 10) {
+            return;
+        }
+        s_err_from_rotor = false;
+        if (s_err_code != 0) {
+            s_err_set_ms = millis();
+        }
+        s_err_code = 0;
+        lvgl_port_lock(-1);
+        apply_meldetext();
+        lvgl_port_unlock();
+        return;
+    }
+    s_err_from_rotor = true;
+    if (s_err_code != code) {
+        s_err_set_ms = millis();
+    }
+    s_err_code = code;
+    s_meldetext_last_alternate_sec = UINT32_MAX;
+    lvgl_port_lock(-1);
+    apply_meldetext();
+    lvgl_port_unlock();
+}
+
 int rotor_error_app_get_error_code(void)
 {
     return s_err_code;
+}
+
+bool rotor_error_app_is_rotor_reported(void)
+{
+    return s_err_code != 0 && s_err_from_rotor;
 }
 
 bool rotor_error_app_is_fault_ring_red(void)
@@ -190,7 +243,7 @@ bool rotor_error_app_is_fault_ring_red(void)
     if (s_err_code == 0) {
         return false;
     }
-    if (s_err_code == 10) {
+    if (s_err_code == 10 && !s_err_from_rotor) {
         return (uint32_t)(millis() - s_err_set_ms) >= ROTOR_ERR10_RING_DELAY_MS;
     }
     return true;
@@ -198,7 +251,14 @@ bool rotor_error_app_is_fault_ring_red(void)
 
 bool rotor_error_app_is_fault_locked(void)
 {
-    return s_err_code != 0 && s_err_code != 10;
+    if (s_err_code == 0) {
+        return false;
+    }
+    /* Lokaler Verbindungstimeout (10) bleibt bedienbar; Rotor-ERR:10 sperrt wie andere Fehler. */
+    if (s_err_code == 10 && !s_err_from_rotor) {
+        return false;
+    }
+    return true;
 }
 
 void rotor_error_app_loop(uint32_t now_ms)

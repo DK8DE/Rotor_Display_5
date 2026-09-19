@@ -2718,10 +2718,11 @@ static bool parse_ack_err(const char *line)
         }
     }
     if (code != 0) {
-        rotor_error_app_set_error_code(code);
+        rotor_error_app_report_rotor_err(code);
         stop_fault_motion_polling();
     } else {
-        /* Verbindungstimeout (10) nur hier aufheben — nicht bei beliebiger Slave-Zeile (sonst GETREF=1 → „Betriebsbereit“ vor ACK_ERR). */
+        /* ACK_ERR:0 — lokalen Watchdog-10 und Rotor-ERR:10 quittieren */
+        rotor_error_app_report_rotor_err(0);
         rotor_error_app_set_error_code(0);
     }
     if (pending_geterr) {
@@ -2912,7 +2913,12 @@ static bool parse_slave_err(const char *line)
     }
     valbuf[i] = '\0';
     if (i > 0U) {
-        rotor_error_app_set_error_code(atoi(valbuf));
+        const int code = atoi(valbuf);
+        rotor_error_app_report_rotor_err(code);
+        if (code != 0) {
+            /* Auch ERR:10 vom Rotor: Fahrt/Polling stoppen und Störung anzeigen (nicht soft-Watchdog). */
+            stop_fault_motion_polling();
+        }
     }
     if (s_pending == Pending::GetAntOff1 || s_pending == Pending::GetAntOff2 ||
         s_pending == Pending::GetAntOff3 || s_pending == Pending::GetAntDp1 ||
@@ -2952,7 +2958,8 @@ static bool parse_slave_err(const char *line)
         s_remote_setpos_grace_end_ms = 0;
         return true;
     }
-    return false;
+    /* Auch ohne offenes Pending: ERR wurde übernommen (z. B. Broadcast im Idle). */
+    return true;
 }
 
 static void process_complete_line(const char *line, size_t len)
@@ -3023,9 +3030,10 @@ static void process_complete_line(const char *line, size_t len)
     if (src == (unsigned)s_slave_id) {
         s_last_slave_rx_ms = millis();
         s_have_slave_rx_ever = true;
-        /* Ohne zyklisches GETERR: Verbindungstimeout(10) bei erster gueltiger Slave-Zeile aufheben.
-         * Echte Fehler kommen asynchron als ERR und setzen den Fehlercode danach wieder. */
-        if (rotor_error_app_get_error_code() == 10 && !strstr(line, ":ERR:")) {
+        /* Nur lokalen Verbindungs-Watchdog (soft 10) bei Slave-Verkehr aufheben — nicht Rotor-ERR:10,
+         * sonst verschwindet Broadcast #rotor:255:ERR:10:… sofort beim nächsten GETPOSDG/GETREF-ACK. */
+        if (rotor_error_app_get_error_code() == 10 && !rotor_error_app_is_rotor_reported() &&
+            !strstr(line, ":ERR:")) {
             rotor_error_app_set_error_code(0);
             /* Kurzer Aussetzer (< 1 s) während einer Fahrt: Polling/Tracking fortsetzen statt im
              * Idle-Polling (Wetter/Motortemp) hängen zu bleiben, obwohl der Rotor weiterdreht. */
@@ -3478,8 +3486,8 @@ static void try_motor_temp_poll(void)
 void rotor_rs485_loop(void)
 {
     const int err = rotor_error_app_get_error_code();
-    /* Harte Fehler (≠10): kein Polling — Verbindungstimeout (10): GETREF-Recovery weiter unten */
-    if (err != 0 && err != 10) {
+    /* Harte Fehler inkl. Rotor-ERR:10: kein Polling — nur lokaler Watchdog-10: GETREF-Recovery */
+    if (rotor_error_app_is_fault_locked()) {
         return;
     }
 
@@ -3589,9 +3597,9 @@ void rotor_rs485_loop(void)
         return;
     }
 
-    /* Fehler 10: periodisch GETREF (Intervall ROTOR_CONN_RECOVERY_GETREF_MS via pending_timed_out), bis der
-     * Slave wieder antwortet; Parser hebt Fehler 10 bei erster gültiger Slave-Zeile auf. */
-    if (rotor_error_app_get_error_code() == 10) {
+    /* Fehler 10 (nur lokal/Watchdog): periodisch GETREF, bis der Slave wieder antwortet.
+     * Rotor-gemeldetes ERR:10 ist fault_locked und kommt hier nicht an. */
+    if (rotor_error_app_get_error_code() == 10 && !rotor_error_app_is_rotor_reported()) {
         if (s_pending == Pending::None) {
             s_err10_recovery_getref_pending = true;
             send_request("GETREF", "0", Pending::GetRef);
