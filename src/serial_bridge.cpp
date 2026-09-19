@@ -182,7 +182,7 @@ static bool is_controller_poll_frame(const uint8_t *data, size_t len)
     return remaining >= 4 && memcmp(data + cmd_start, "TEST", 4) == 0;
 }
 
-/** Einmalige Boot-Leseabfragen (Versatz/Dipol/Oeffnungswinkel/Encoder): GETANTOFF, GETANTDP, GETANGLE, GETENCTYPE, GETMAXDG. */
+/** Einmalige Boot-Leseabfragen (Versatz/Dipol/Oeffnungswinkel/Encoder/Namen): GETANTOFF, GETANTDP, GETANGLE, GETENCTYPE, GETMAXDG, GETANTNAME. */
 static bool is_antenna_boot_read_frame(const uint8_t *data, size_t len)
 {
     if (!data || len < 8 || data[0] != '#') {
@@ -208,6 +208,7 @@ static bool is_antenna_boot_read_frame(const uint8_t *data, size_t len)
     return (remaining >= 9 && memcmp(data + cmd_start, "GETANTOFF", 9) == 0) ||
            (remaining >= 8 && memcmp(data + cmd_start, "GETANTDP", 8) == 0) ||
            (remaining >= 8 && memcmp(data + cmd_start, "GETANGLE", 8) == 0) ||
+           (remaining >= 10 && memcmp(data + cmd_start, "GETANTNAME", 10) == 0) ||
            (remaining >= 10 && memcmp(data + cmd_start, "GETENCTYPE", 10) == 0) ||
            (remaining >= 8 && memcmp(data + cmd_start, "GETMAXDG", 8) == 0);
 }

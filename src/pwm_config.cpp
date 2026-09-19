@@ -1,6 +1,6 @@
 /**
- * config.json auf FFat (data/ → uploadfs): PWM, RS485-IDs, Antennen-Bezeichner, letzte Antenne.
- * Antennenversätze kommen zur Laufzeit vom Rotor (GETANTOFFn), nicht aus der Datei.
+ * config.json auf FFat (data/ → uploadfs): PWM, RS485-IDs, letzte Antenne.
+ * Antennenversätze und -namen kommen zur Laufzeit vom Rotor (GETANTOFFn / GETANTNAMEn), nicht aus der Datei.
  * pwm_fast: 1 = Werkseinstellung/UI „Fast“, 0 = „Slow“ (welches PWM-Limit nach Boot/Taste aktiv ist).
  */
 
@@ -173,19 +173,7 @@ void pwm_config_load(void)
     if (la >= 1 && la <= 3) {
         s_last_antenna = (uint8_t)la;
     }
-    char tmp[48];
-    if (parse_string_quoted(buf, "antenna_1_label", tmp, sizeof(tmp))) {
-        strncpy(s_ant_label[0], tmp, sizeof(s_ant_label[0]) - 1);
-        s_ant_label[0][sizeof(s_ant_label[0]) - 1] = '\0';
-    }
-    if (parse_string_quoted(buf, "antenna_2_label", tmp, sizeof(tmp))) {
-        strncpy(s_ant_label[1], tmp, sizeof(s_ant_label[1]) - 1);
-        s_ant_label[1][sizeof(s_ant_label[1]) - 1] = '\0';
-    }
-    if (parse_string_quoted(buf, "antenna_3_label", tmp, sizeof(tmp))) {
-        strncpy(s_ant_label[2], tmp, sizeof(s_ant_label[2]) - 1);
-        s_ant_label[2][sizeof(s_ant_label[2]) - 1] = '\0';
-    }
+    /* Antennennamen nicht aus config.json — Quelle ist der Rotor (GETANTNAME1…3 beim Boot). */
     int cf = parse_int_after_key(buf, "confrq");
     if (cf >= 200 && cf <= 4000) {
         s_touch_beep_freq_hz = (uint16_t)cf;

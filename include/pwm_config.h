@@ -33,7 +33,7 @@ void pwm_config_set_fast(uint8_t pct);
 /** Antennen-UI: 1…3 */
 uint8_t pwm_config_get_last_antenna(void);
 void pwm_config_set_last_antenna(uint8_t n);
-/** Zeiger auf internen Puffer (bis nächstem load/save); idx 1…3 */
+/** Labels 1…3 (Anzeige); Quelle Rotor GETANTNAME / SETANTNAME (Boot), nicht config.json-Load. idx 1…3 */
 const char *pwm_config_get_antenna_label(int idx);
 /** idx 1…3, max. 47 Zeichen + NUL */
 void pwm_config_set_antenna_label(int idx, const char *s);

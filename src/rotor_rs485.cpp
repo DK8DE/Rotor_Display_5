@@ -13,6 +13,7 @@
  * GETCONDELTA/SETCONDELTA: Encoder-Schritt 1 oder 10 Zehntelgrad (0,1° bzw. 1° pro Raste) → config encoder_delta.
  * GETCONCHA/SETCONCHA: Antennenwechsel 1 = taget behalten + SETPOS, 0 = taget = Ist-Anzeige (config concha).
  * GETANTDP1…3 / SETANTDP1…3: Dipol-Flag pro Antenne (0/1) — Boot-Kette nach GETANTOFF.
+ * GETANTNAME1…3 / SETANTNAME1…3: Antennennamen vom Rotor (Boot nach GETMAXDG; kein config.json als Quelle).
  * GETCONLEDP/SETCONLEDP: NeoPixel-Ring global 0…100 % (config.json conledp auf FFat).
  * GETASELECT: aktive Antenne 1…3 (pwm_config last_antenna) — Antwort ACK_GETASELECT an PC.
  * GETENCTYPE/GETMAXDG: Boot nach GETANGLE — Encoder-Typ 3 aktiviert erweiterten Fahrbereich (Span).
@@ -156,6 +157,9 @@ enum class Pending : uint8_t {
     GetAngle3,
     GetEncType,
     GetMaxDg,
+    GetAntName1,
+    GetAntName2,
+    GetAntName3,
     GetAnemo,
     GetTempA,
     GetWindDir,
@@ -178,6 +182,9 @@ static bool is_antenna_boot_get_pending(Pending p)
     case Pending::GetAngle3:
     case Pending::GetEncType:
     case Pending::GetMaxDg:
+    case Pending::GetAntName1:
+    case Pending::GetAntName2:
+    case Pending::GetAntName3:
         return true;
     default:
         return false;
@@ -201,6 +208,9 @@ static bool is_proxy_blocked_poll_pending(Pending p)
     case Pending::GetAngle3:
     case Pending::GetEncType:
     case Pending::GetMaxDg:
+    case Pending::GetAntName1:
+    case Pending::GetAntName2:
+    case Pending::GetAntName3:
     case Pending::GetAnemo:
     case Pending::GetTempA:
     case Pending::GetWindDir:
@@ -350,6 +360,9 @@ static uint8_t s_angle_boot_phase = 0;
 /** Nach GETANGLE: GETENCTYPE → GETMAXDG (Fahrbereich / Encoder-Typ 3); phase 0 = inaktiv */
 static bool s_enc_boot_pending = false;
 static uint8_t s_enc_boot_phase = 0;
+/** Nach GETMAXDG: GETANTNAME1→2→3 (Namen vom Rotor); phase 0 = inaktiv */
+static bool s_name_boot_pending = false;
+static uint8_t s_name_boot_phase = 0;
 
 /** Zuletzt #FremdMaster:RotorID:… gesehen (Millis); 0 = noch keiner */
 static uint32_t s_last_foreign_master_to_slave_ms = 0;
@@ -375,10 +388,17 @@ static uint32_t s_next_motortemp_ms = 0;
 static bool s_boot_test_done = false;
 static uint8_t s_boot_test_timeout_count = 0;
 
+static void abort_name_boot(void)
+{
+    s_name_boot_pending = false;
+    s_name_boot_phase = 0;
+}
+
 static void abort_enc_boot(void)
 {
     s_enc_boot_pending = false;
     s_enc_boot_phase = 0;
+    abort_name_boot();
 }
 
 static void abort_angle_boot(void)
@@ -496,7 +516,7 @@ float rotor_rs485_get_last_target_bus_deg(void) { return s_goto_commanded_deg; }
 
 bool rotor_rs485_boot_read_in_progress(void)
 {
-    return s_antenna_boot_pending || s_angle_boot_pending || s_enc_boot_pending;
+    return s_antenna_boot_pending || s_angle_boot_pending || s_enc_boot_pending || s_name_boot_pending;
 }
 
 bool rotor_rs485_is_foreign_pc_listen_mode(void)
@@ -760,7 +780,8 @@ static void send_request(const char *cmd, const char *params_str, Pending p)
         /* Versatz-/Dipol-/Winkel-Boot ist einmalig und essenziell: auch als Mitläufer senden,
          * solange die jeweilige Boot-Kette noch nicht abgeschlossen ist. */
         const bool boot_read = is_antenna_boot_get_pending(p) &&
-                               (s_antenna_boot_pending || s_angle_boot_pending || s_enc_boot_pending);
+                               (s_antenna_boot_pending || s_angle_boot_pending || s_enc_boot_pending ||
+                                s_name_boot_pending);
         if (!boot_read) {
             return;
         }
@@ -905,6 +926,10 @@ bool rotor_rs485_goto_degrees(float deg)
     } else if (s_pending == Pending::GetEncType || s_pending == Pending::GetMaxDg) {
         clear_pending();
         abort_enc_boot();
+    } else if (s_pending == Pending::GetAntName1 || s_pending == Pending::GetAntName2 ||
+               s_pending == Pending::GetAntName3) {
+        clear_pending();
+        abort_name_boot();
     } else if (s_pending != Pending::None) {
         clear_pending();
     }
@@ -1309,6 +1334,36 @@ static void sniff_setangle_to_slave(const char *line)
         if (v == v) {
             pwm_config_set_opening_deg(tags[i].idx, v);
         }
+        return;
+    }
+}
+
+/** Fremd-Master: SETANTNAMEn an Slave — Antennenname übernehmen (Quelle = Rotor). */
+static void sniff_setantname_to_slave(const char *line)
+{
+    static const struct {
+        const char *tag;
+        int idx;
+    } tags[] = {
+        {":SETANTNAME1:", 1},
+        {":SETANTNAME2:", 2},
+        {":SETANTNAME3:", 3},
+    };
+    for (size_t i = 0; i < 3; i++) {
+        const char *p = strstr(line, tags[i].tag);
+        if (!p) {
+            continue;
+        }
+        p += strlen(tags[i].tag);
+        char tmp[48];
+        size_t n = 0;
+        while (*p && *p != ':' && *p != '$' && n + 1 < sizeof(tmp)) {
+            tmp[n++] = *p;
+            p++;
+        }
+        tmp[n] = '\0';
+        pwm_config_set_antenna_label(tags[i].idx, tmp);
+        s_pending_config_changed_from_bus = true;
         return;
     }
 }
@@ -1760,6 +1815,12 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
                 return true;
             }
             pwm_config_set_antenna_label(ant[i].idx, par);
+            /* Namen leben am Rotor: SETCONANTNAME zusätzlich als SETANTNAME an den Slave. */
+            {
+                char cmd[16];
+                snprintf(cmd, sizeof(cmd), "SETANTNAME%d", ant[i].idx);
+                send_line_to(s_slave_id, cmd, par);
+            }
             schedule_pwm_config_save_from_bus();
             s_pending_config_changed_from_bus = true;
             config_reply_ack_label(src, ant[i].ack_set, pwm_config_get_antenna_label(ant[i].idx));
@@ -1812,6 +1873,7 @@ static void dispatch_bus_command_to_slave(const char *line, unsigned src)
     sniff_setantoff_to_slave(line);
     sniff_setantdp_to_slave(line);
     sniff_setangle_to_slave(line);
+    sniff_setantname_to_slave(line);
 }
 
 static void on_ack_timeout()
@@ -1841,6 +1903,9 @@ static void on_ack_timeout()
         case Pending::GetAngle3:
         case Pending::GetEncType:
         case Pending::GetMaxDg:
+        case Pending::GetAntName1:
+        case Pending::GetAntName2:
+        case Pending::GetAntName3:
         case Pending::Test:
             clear_pending();
             return;
@@ -1929,6 +1994,15 @@ static void on_ack_timeout()
         break;
     case Pending::GetMaxDg:
         send_request("GETMAXDG", "0", Pending::GetMaxDg);
+        break;
+    case Pending::GetAntName1:
+        send_request("GETANTNAME1", "0", Pending::GetAntName1);
+        break;
+    case Pending::GetAntName2:
+        send_request("GETANTNAME2", "0", Pending::GetAntName2);
+        break;
+    case Pending::GetAntName3:
+        send_request("GETANTNAME3", "0", Pending::GetAntName3);
         break;
     case Pending::GetAnemo:
         send_request("GETANEMO", "0", Pending::GetAnemo);
@@ -2320,8 +2394,108 @@ static bool parse_ack_getmaxdg(const char *line)
     if (s_enc_boot_pending && s_enc_boot_phase == 2 && was) {
         s_enc_boot_pending = false;
         s_enc_boot_phase = 0;
+        s_name_boot_pending = true;
+        s_name_boot_phase = 1;
+        send_request("GETANTNAME1", "0", Pending::GetAntName1);
+    }
+    return true;
+}
+
+/** ACK_GETANTNAMEn:PARAMS:CS$ — PARAMS = Name, optional mit ";0" fuer CS (wie GETCONANTNAME). */
+static bool parse_ack_getantname_label(const char *line, const char *ack_tag, char *out, size_t out_sz)
+{
+    const char *p = strstr(line, ack_tag);
+    if (!p || !out || out_sz == 0) {
+        return false;
+    }
+    p += strlen(ack_tag);
+    const char *dollar = strchr(p, '$');
+    if (!dollar) {
+        return false;
+    }
+    const char *last_colon = nullptr;
+    for (const char *q = p; q < dollar; ++q) {
+        if (*q == ':') {
+            last_colon = q;
+        }
+    }
+    if (!last_colon || last_colon <= p) {
+        return false;
+    }
+    size_t n = (size_t)(last_colon - p);
+    if (n >= out_sz) {
+        n = out_sz - 1;
+    }
+    memcpy(out, p, n);
+    out[n] = '\0';
+    char *semi = strchr(out, ';');
+    if (semi) {
+        *semi = '\0';
+    }
+    return true;
+}
+
+static bool parse_ack_getantname1(const char *line)
+{
+    if (!strstr(line, ":ACK_GETANTNAME1:")) {
+        return false;
+    }
+    char name[48];
+    if (parse_ack_getantname_label(line, ":ACK_GETANTNAME1:", name, sizeof(name))) {
+        pwm_config_set_antenna_label(1, name);
+        s_pending_config_changed_from_bus = true;
+    }
+    const bool was = (s_pending == Pending::GetAntName1);
+    if (was) {
+        clear_pending();
+    }
+    if (s_name_boot_pending && s_name_boot_phase == 1 && was) {
+        s_name_boot_phase = 2;
+        send_request("GETANTNAME2", "0", Pending::GetAntName2);
+    }
+    return true;
+}
+
+static bool parse_ack_getantname2(const char *line)
+{
+    if (!strstr(line, ":ACK_GETANTNAME2:")) {
+        return false;
+    }
+    char name[48];
+    if (parse_ack_getantname_label(line, ":ACK_GETANTNAME2:", name, sizeof(name))) {
+        pwm_config_set_antenna_label(2, name);
+        s_pending_config_changed_from_bus = true;
+    }
+    const bool was = (s_pending == Pending::GetAntName2);
+    if (was) {
+        clear_pending();
+    }
+    if (s_name_boot_pending && s_name_boot_phase == 2 && was) {
+        s_name_boot_phase = 3;
+        send_request("GETANTNAME3", "0", Pending::GetAntName3);
+    }
+    return true;
+}
+
+static bool parse_ack_getantname3(const char *line)
+{
+    if (!strstr(line, ":ACK_GETANTNAME3:")) {
+        return false;
+    }
+    char name[48];
+    if (parse_ack_getantname_label(line, ":ACK_GETANTNAME3:", name, sizeof(name))) {
+        pwm_config_set_antenna_label(3, name);
+        s_pending_config_changed_from_bus = true;
+    }
+    const bool was = (s_pending == Pending::GetAntName3);
+    if (was) {
+        clear_pending();
+    }
+    if (s_name_boot_pending && s_name_boot_phase == 3 && was) {
+        s_name_boot_pending = false;
+        s_name_boot_phase = 0;
         s_pending_antenna_offset_notify = true;
-        /* Span jetzt bekannt — Position erneut lesen (früherer GETPOSDG lief oft noch mit Span 360). */
+        /* Span + Namen bekannt — Position erneut lesen (früherer GETPOSDG oft noch mit Span 360). */
         if (s_slave_referenced && s_pending == Pending::None) {
             s_align_target_after_pos_read = true;
             send_request("GETPOSDG", "0", Pending::GetPosDg);
@@ -2681,6 +2855,21 @@ static bool parse_nak_and_clear(const char *line)
         abort_enc_boot();
         return true;
     }
+    if (strstr(line, ":NAK_GETANTNAME1:") && s_pending == Pending::GetAntName1) {
+        clear_pending();
+        abort_name_boot();
+        return true;
+    }
+    if (strstr(line, ":NAK_GETANTNAME2:") && s_pending == Pending::GetAntName2) {
+        clear_pending();
+        abort_name_boot();
+        return true;
+    }
+    if (strstr(line, ":NAK_GETANTNAME3:") && s_pending == Pending::GetAntName3) {
+        clear_pending();
+        abort_name_boot();
+        return true;
+    }
     if (strstr(line, ":NAK_GETERR:") && s_pending == Pending::GetErr) {
         clear_pending();
         if (!s_startup_err_known) {
@@ -2741,6 +2930,12 @@ static bool parse_slave_err(const char *line)
     if (s_pending == Pending::GetEncType || s_pending == Pending::GetMaxDg) {
         clear_pending();
         abort_enc_boot();
+        return true;
+    }
+    if (s_pending == Pending::GetAntName1 || s_pending == Pending::GetAntName2 ||
+        s_pending == Pending::GetAntName3) {
+        clear_pending();
+        abort_name_boot();
         return true;
     }
     if (s_pending == Pending::GetPosDg || s_pending == Pending::SetPosDg || s_pending == Pending::Stop ||
@@ -2908,6 +3103,15 @@ static void process_complete_line(const char *line, size_t len)
         if (parse_ack_getmaxdg(line)) {
             return;
         }
+        if (parse_ack_getantname1(line)) {
+            return;
+        }
+        if (parse_ack_getantname2(line)) {
+            return;
+        }
+        if (parse_ack_getantname3(line)) {
+            return;
+        }
         if (parse_ack_err(line)) {
             return;
         }
@@ -3019,6 +3223,8 @@ void rotor_rs485_init(void)
     s_angle_boot_phase = 0;
     s_enc_boot_pending = false;
     s_enc_boot_phase = 0;
+    s_name_boot_pending = false;
+    s_name_boot_phase = 0;
     s_next_weather_ms = millis() + 2000u;
     s_weather_phase = 0;
     s_next_motortemp_ms = millis() + 2000u;
@@ -3178,6 +3384,30 @@ static void try_enc_boot_step(void)
     }
 }
 
+/** Antennennamen-Boot: GETANTNAME1→2→3; Timeout-Retry wie Antennen-Boot. */
+static void try_name_boot_step(void)
+{
+    if (!s_name_boot_pending) {
+        return;
+    }
+    if (s_pending != Pending::None || s_poll_pos || s_poll_ref) {
+        return;
+    }
+    switch (s_name_boot_phase) {
+    case 1:
+        send_request("GETANTNAME1", "0", Pending::GetAntName1);
+        break;
+    case 2:
+        send_request("GETANTNAME2", "0", Pending::GetAntName2);
+        break;
+    case 3:
+        send_request("GETANTNAME3", "0", Pending::GetAntName3);
+        break;
+    default:
+        break;
+    }
+}
+
 /** GETANEMO / GETTEMPA / GETWINDDIR nur ohne Fremd-PC, Stillstand (kein Homing-/Positions-Polling).
  * anemometer=0: nur GETTEMPA (Außentemp im Tab Rotor_Info, kein Wind-Tab). */
 static void try_weather_poll(void)
@@ -3192,6 +3422,9 @@ static void try_weather_poll(void)
         return;
     }
     if (s_enc_boot_pending && s_enc_boot_phase != 0) {
+        return;
+    }
+    if (s_name_boot_pending && s_name_boot_phase != 0) {
         return;
     }
     if ((int32_t)(millis() - s_next_weather_ms) < 0) {
@@ -3230,6 +3463,9 @@ static void try_motor_temp_poll(void)
         return;
     }
     if (s_enc_boot_pending && s_enc_boot_phase != 0) {
+        return;
+    }
+    if (s_name_boot_pending && s_name_boot_phase != 0) {
         return;
     }
     if ((int32_t)(millis() - s_next_motortemp_ms) < 0) {
@@ -3340,6 +3576,10 @@ void rotor_rs485_loop(void)
             return;
         }
         try_enc_boot_step();
+        if (s_pending != Pending::None) {
+            return;
+        }
+        try_name_boot_step();
         return;
     }
 
@@ -3396,6 +3636,12 @@ void rotor_rs485_loop(void)
     }
 
     try_enc_boot_step();
+
+    if (s_pending != Pending::None) {
+        return;
+    }
+
+    try_name_boot_step();
 
     if (s_pending != Pending::None) {
         return;

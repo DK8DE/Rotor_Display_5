@@ -121,11 +121,11 @@ Bei einem Encoder‑Wechsel müssen Counts (`SETENCCRI`/`SETENCCAX`) und ggf. `S
 
 **Getriebespiel‑Kompensation beim Motor‑Encoder (Typ 1):** Die Referenz wird mit definierter Anfahr‑Richtung und Überfahr‑/Rückzugslogik angefahren, damit der Nullpunkt trotz Spiel reproduzierbar bleibt.
 
-**Display‑Controller (Boot):** Nach `GETANTOFF*` / `GETANTDP*` / `GETANGLE*` liest der Display‑Controller `GETENCTYPE` und `GETMAXDG` vom Rotor (auch im Mitläufer‑Modus). Ohne gültigen Typ 3 bleibt der wirksame Anzeigebereich 360°.
+**Display‑Controller (Boot):** Nach `GETANTOFF*` / `GETANTDP*` / `GETANGLE*` liest der Display‑Controller `GETENCTYPE`, `GETMAXDG` und anschließend `GETANTNAME1…3` vom Rotor (auch im Mitläufer‑Modus). Antennennamen kommen **nicht** mehr aus `config.json`. Ohne gültigen Typ 3 bleibt der wirksame Anzeigebereich 360°.
 
 ## 3. RS485‑Befehle – Tabelle {#cmd-table}
 
-Spalte 1 zeigt ein Beispiel vom Master zum Slave. Spalte 2 zeigt die typische Antwort vom Slave. Spalte 3 ist eine Kurzbeschreibung. **Antennenversatz** (`SETANTOFF1..3`/`GET…`), **Öffnungswinkel** (`SETANGLE1..3`/`GET…`) und **Dipol‑Flag** (`SETANTDP1..3`/`GET…`) werden im Rotor dauerhaft gespeichert (NVS) – dieselben Befehle stehen im Bridge‑Befehlsfenster zur Verfügung.
+Spalte 1 zeigt ein Beispiel vom Master zum Slave. Spalte 2 zeigt die typische Antwort vom Slave. Spalte 3 ist eine Kurzbeschreibung. **Antennenversatz** (`SETANTOFF1..3`/`GET…`), **Öffnungswinkel** (`SETANGLE1..3`/`GET…`), **Dipol‑Flag** (`SETANTDP1..3`/`GET…`) und **Antennennamen** (`SETANTNAME1..3`/`GET…`) werden im Rotor dauerhaft gespeichert (NVS) – dieselben Befehle stehen im Bridge‑Befehlsfenster zur Verfügung.
 
 | Master → Slave | Slave → Master | Kurzbeschreibung |
 | --- | --- | --- |
@@ -164,6 +164,12 @@ Spalte 1 zeigt ein Beispiel vom Master zum Slave. Spalte 2 zeigt die typische An
 | `#0:20:SETANTDP2:1:20,01$` | `#20:0:ACK_SETANTDP2:1:<CS>$` oder: `#20:0:NAK_SETANTDP2:REASON:CS$` | **[SETANTDP2](#cmd-SETANTDP1)** Dipol‑Flag Antenne 2 setzen (0/1, NVS). |
 | `#0:20:GETANTDP3:1:20,01$` | `#20:0:ACK_GETANTDP3:<0\|1>:<CS>$` oder: `#20:0:NAK_GETANTDP3:REASON:CS$` | **[GETANTDP3](#cmd-GETANTDP1)** Dipol‑Flag Antenne 3 lesen. |
 | `#0:20:SETANTDP3:1:20,01$` | `#20:0:ACK_SETANTDP3:1:<CS>$` oder: `#20:0:NAK_SETANTDP3:REASON:CS$` | **[SETANTDP3](#cmd-SETANTDP1)** Dipol‑Flag Antenne 3 setzen (0/1, NVS). |
+| `#0:20:GETANTNAME1:0:20$` | `#20:0:ACK_GETANTNAME1:<NAME>;0:<CS>$` oder: `#20:0:NAK_GETANTNAME1:REASON:CS$` | **[GETANTNAME1](#cmd-GETANTNAME1)** Antennenname 1 lesen (NVS am Rotor; Display‑Boot). |
+| `#0:20:SETANTNAME1:KW Beam:CS$` | `#20:0:ACK_SETANTNAME1:…:<CS>$` oder: `#20:0:NAK_SETANTNAME1:REASON:CS$` | **[SETANTNAME1](#cmd-SETANTNAME1)** Antennenname 1 speichern (kein `:` im Namen). |
+| `#0:20:GETANTNAME2:0:20$` | `#20:0:ACK_GETANTNAME2:<NAME>;0:<CS>$` oder NAK | **[GETANTNAME2](#cmd-GETANTNAME1)** Antennenname 2 lesen. |
+| `#0:20:SETANTNAME2:…:CS$` | `#20:0:ACK_SETANTNAME2:…:<CS>$` oder NAK | **[SETANTNAME2](#cmd-SETANTNAME1)** Antennenname 2 speichern. |
+| `#0:20:GETANTNAME3:0:20$` | `#20:0:ACK_GETANTNAME3:<NAME>;0:<CS>$` oder NAK | **[GETANTNAME3](#cmd-GETANTNAME1)** Antennenname 3 lesen. |
+| `#0:20:SETANTNAME3:…:CS$` | `#20:0:ACK_SETANTNAME3:…:<CS>$` oder NAK | **[SETANTNAME3](#cmd-SETANTNAME1)** Antennenname 3 speichern. |
 | `#0:255:SETASELECT:2:CS$` bzw. `#0:20:SETASELECT:2:CS$` | (kein Pflicht‑ACK; Broadcast 255 oder Unicast Rotor‑ID) | **[SETASELECT](#cmd-SETASELECT)** Aktive Antenne 1…3 wählen (Display‑Controller übernimmt UI/Versatz). |
 | `#0:20:GETTEMPAW:...:CS$` | `#20:0:ACK_GETTEMPAW:...:<CS>$` oder: `#20:0:NAK_GETTEMPAW:REASON:CS$` | **[GETTEMPAW](#cmd-GETTEMPAW)** Warnschwelle Umgebungstemperatur lesen. |
 | `#0:20:GETTEMPMW:...:CS$` | `#20:0:ACK_GETTEMPMW:...:<CS>$` oder: `#20:0:NAK_GETTEMPMW:REASON:CS$` | **[GETTEMPMW](#cmd-GETTEMPMW)** Warnschwelle Motortemperatur lesen. |
@@ -293,8 +299,8 @@ Schreibbefehle speichern in `config.json` (Slow/Fast‑PWM, IDs, Antennen‑Labe
 | `GETCONTID` | `ACK_GETCONTID` (Parameter = `master_id` des Controllers) |
 | `SETCONTID` | `ACK_SETCONTID` / `NAK_SETCONTID` (1…254) — Ziel `DST = master_id` (unicast). |
 | `SETCONIDF` oder `SETCONTID` mit `DST = 255` (Broadcast) | `ACK_SETCONIDF` bzw. `ACK_SETCONTID` / `NAK_SETCONTID` — setzt die **neue** Controller‑`master_id` in `config.json`, wenn die bisherige ID unbekannt ist. Checksumme: `CS = SRC + 255 + <neue ID>` (z. B. `#1:255:SETCONIDF:5:261$` mit `1+255+5=261`). |
-| `GETCONANTNAME1` … `GETCONANTNAME3` | `ACK_GETCONANTNAME1` … / `NAK_GETCONANTNAME*` — Antworttext enthält den Namen, für eine stabile CS wird `;0` angehängt (letzter Zahlenwert 0). |
-| `SETCONANTNAME1` … `SETCONANTNAME3` | `ACK_SETCONANTNAME1` … / `NAK_SETCONANTNAME*` — ein `:` im Namen ist unzulässig (`NAK` mit Code 1). |
+| `GETCONANTNAME1` … `GETCONANTNAME3` | `ACK_GETCONANTNAME1` … / `NAK_GETCONANTNAME*` — liefert den **aktuell am Controller gecachten** Namen (nach Boot = Rotor `GETANTNAME*`); ACK mit `;0` für stabile CS. |
+| `SETCONANTNAME1` … `SETCONANTNAME3` | `ACK_SETCONANTNAME1` … / `NAK_SETCONANTNAME*` — speichert lokal und sendet zusätzlich `SETANTNAME*` an den Rotor; `:` im Namen unzulässig (`NAK` Code 1). |
 | `GETCONSPWM` / `SETCONSPWM` | `ACK_GETCONSPWM` / `ACK_SETCONSPWM` (bzw. `NAK_SETCONSPWM`) — Slow‑PWM in % (0…100), entspricht `slow_pwm` in der JSON. |
 | `GETCONFPWM` / `SETCONFPWM` | `ACK_GETCONFPWM` / `ACK_SETCONFPWM` (bzw. `NAK_SETCONFPWM`) — Fast‑PWM in % (0…100), entspricht `fast_pwm`. |
 | `GETCONFRQ` / `SETCONFRQ` | `ACK_GETCONFRQ` / `ACK_SETCONFRQ` — Touch‑Pieps‑Frequenz in Hz (200…4000), in `config.json` als `confrq`. |
@@ -795,6 +801,25 @@ Hier ist jeder Befehl in einem eigenen Absatz beschrieben: Was er macht, wie man
 
 **Telegramm (Beispiel):** `#0:20:SETANTDP1:1:20,01$`  
 **Antwort:** `#20:0:ACK_SETANTDP1:1:<CS>$`
+
+---
+
+#### `GETANTNAME1` / `GETANTNAME2` / `GETANTNAME3` {#cmd-GETANTNAME1}
+
+**Was es macht:** Antennenbezeichner (Anzeige‑Label) vom Rotor lesen.
+
+**Telegramm:** `#0:20:GETANTNAME1:0:20$`  
+**Antwort:** `#20:0:ACK_GETANTNAME1:<NAME>;0:<CS>$` (`;0` optional für CS ohne Ziffern im Namen)
+
+**Details:** Der Display‑Controller fragt beim Boot `GETANTNAME1→2→3` ab und aktualisiert die UI‑Labels. Persistenz liegt am Rotor (NVS), nicht in der Controller‑`config.json`.
+
+---
+
+#### `SETANTNAME1` / `SETANTNAME2` / `SETANTNAME3` {#cmd-SETANTNAME1}
+
+**Was es macht:** Antennenbezeichner speichern (Rotor‑NVS).
+
+**Details:** Kein Doppelpunkt `:` im Namen. Der Display‑Controller übernimmt geänderte Namen vom Bus (Sniff) und aktualisiert die Anzeige. `SETCONANTNAME*` am Controller leitet zusätzlich `SETANTNAME*` an den Rotor weiter.
 
 ---
 

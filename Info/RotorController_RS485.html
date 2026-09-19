@@ -218,7 +218,7 @@
 </ul>
 <p><b>Auswirkung in der Firmware:</b> Homing‑Rampen, erwartete Counts pro Umdrehung sowie Schutz‑ und Auswertefunktionen nutzen die Counts‑pro‑Umdrehung‑Annahme der gewählten Variante.</p>
 <p><b>Getriebespiel‑Kompensation beim Motor‑Encoder (Typ 1):</b> Die Referenz wird mit definierter Anfahr‑Richtung und Überfahr‑/Rückzugslogik angefahren, damit der Nullpunkt trotz Spiel reproduzierbar bleibt.</p>
-<p><b>Display‑Controller (Boot):</b> Nach <code>GETANTOFF*</code> / <code>GETANTDP*</code> / <code>GETANGLE*</code> liest der Display‑Controller <code>GETENCTYPE</code> und <code>GETMAXDG</code> vom Rotor (auch im Mitläufer‑Modus). Ohne gültigen Typ&nbsp;3 bleibt der wirksame Anzeigebereich 360°.</p>
+<p><b>Display‑Controller (Boot):</b> Nach <code>GETANTOFF*</code> / <code>GETANTDP*</code> / <code>GETANGLE*</code> liest der Display‑Controller <code>GETENCTYPE</code>, <code>GETMAXDG</code> und anschließend <code>GETANTNAME1…3</code> vom Rotor (auch im Mitläufer‑Modus). Antennennamen kommen <b>nicht</b> mehr aus <code>config.json</code>. Ohne gültigen Typ&nbsp;3 bleibt der wirksame Anzeigebereich 360°.</p>
 </section>
 
 <section class="section" id="cmd-table">
