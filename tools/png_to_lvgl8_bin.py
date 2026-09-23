@@ -2,10 +2,11 @@
 """
 PNG → LVGL-8-Bin (RGB565, LV_COLOR_DEPTH=16, LV_COLOR_16_SWAP=1).
 
-Standard: Alle *.png unter imgs/ (rekursiv) → data/img/ mit gleichem relativen
-Pfad und Endung .bin — vorhandene Dateien werden überschrieben.
+Standard: Bekannte PNGs unter data/img/ (Kompass_V5, Kompass_EL, windPfeil)
+→ data/img/ui_image_*.bin. Sonst: alle *.png unter imgs/ → data/img/.
 
   python tools/png_to_lvgl8_bin.py
+  python tools/png_to_lvgl8_bin.py --from-data-img
 
 Abhängigkeit: pip install pillow  (siehe requirements.txt)
 
@@ -90,6 +91,10 @@ def process_imgs_folder(root: Path, *, use_alpha: bool) -> int:
     seen: set[Path] = set()
     unique: list[Path] = []
     for p in pngs:
+        # Web-Flasher-Pakete unter IMGs/update|full-install nicht mitkonvertieren
+        parts_l = {x.lower() for x in p.parts}
+        if "update" in parts_l or "full-install" in parts_l:
+            continue
         rp = p.resolve()
         if rp not in seen:
             seen.add(rp)
@@ -108,10 +113,53 @@ def process_imgs_folder(root: Path, *, use_alpha: bool) -> int:
     return 0
 
 
+# Alias: Quell-PNGs oft unter data/img mit EEZ-/Studio-Namen
+# → Ziel-Bins mit Asset-Namen aus screens.c / images.c
+DATA_IMG_ALIASES: dict[str, str] = {
+    "Kompass_V5.png": "ui_image_kompass_bg.bin",
+    "Kompass_EL.png": "ui_image_kompass_el.bin",
+    "windPfeil.png": "ui_image_pfeil_wind.bin",
+}
+
+
+def process_data_img_aliases(root: Path, *, use_alpha: bool) -> int:
+    """Konvertiert bekannte PNGs in data/img/ auf ui_image_*.bin (in-place)."""
+    data_img = root / "data" / "img"
+    if not data_img.is_dir():
+        print(f"Ordner fehlt: {data_img}", file=sys.stderr)
+        return 1
+    n = 0
+    for src_name, dst_name in DATA_IMG_ALIASES.items():
+        src = data_img / src_name
+        if not src.is_file():
+            # case-insensitive Suche
+            found = None
+            for p in data_img.iterdir():
+                if p.is_file() and p.name.lower() == src_name.lower():
+                    found = p
+                    break
+            if not found:
+                print(f"Hinweis: {src_name} fehlt in {data_img}")
+                continue
+            src = found
+        convert_png(src, data_img / dst_name, use_alpha=use_alpha)
+        n += 1
+    if n == 0:
+        print(f"Keine Alias-PNGs in {data_img}")
+        return 1
+    print(f"Fertig (data/img Aliase): {n} Datei(en)")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="PNG → LVGL8 .bin (imgs/ → data/img/)")
     ap.add_argument("--input", "-i", type=Path, help="Einzelne Eingabe-PNG")
     ap.add_argument("--output", "-o", type=Path, help="Einzelne Ausgabe-.bin")
+    ap.add_argument(
+        "--from-data-img",
+        action="store_true",
+        help="Bekannte PNGs in data/img (Kompass_V5/EL, windPfeil) → ui_image_*.bin",
+    )
     ap.add_argument(
         "--no-alpha",
         action="store_true",
@@ -131,6 +179,19 @@ def main() -> int:
     if args.input or args.output:
         print("Entweder beide (-i und -o) oder keines (dann gesamter imgs/-Ordner).", file=sys.stderr)
         return 1
+
+    if args.from_data_img:
+        return process_data_img_aliases(root, use_alpha=use_alpha)
+
+    # Standard: zuerst data/img-Aliase, falls vorhanden; sonst imgs/
+    data_img = root / "data" / "img"
+    has_alias = data_img.is_dir() and any(
+        (data_img / n).is_file()
+        or any(p.name.lower() == n.lower() for p in data_img.iterdir() if p.is_file())
+        for n in DATA_IMG_ALIASES
+    )
+    if has_alias:
+        return process_data_img_aliases(root, use_alpha=use_alpha)
 
     return process_imgs_folder(root, use_alpha=use_alpha)
 

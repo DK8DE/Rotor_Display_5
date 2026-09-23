@@ -23,9 +23,15 @@ void pwm_config_set_pwm_ui_fast(uint8_t fast_0_or_1);
 /** RS485: eigene Master-ID (1…254), Default 2 */
 uint8_t pwm_config_get_master_id(void);
 void pwm_config_set_master_id(uint8_t id);
-/** RS485: Rotor-Slave-ID (1…254, nicht 255/Broadcast), Default 20 */
+/** RS485: Rotor-Slave-ID AZ (0 = Achse aus, 1…254), Default 20 — JSON rotor_id */
 uint8_t pwm_config_get_rotor_id(void);
 void pwm_config_set_rotor_id(uint8_t id);
+/** Alias: gleiche ID wie pwm_config_get_rotor_id (Azimut) */
+uint8_t pwm_config_get_rotor_az_id(void);
+void pwm_config_set_rotor_az_id(uint8_t id);
+/** RS485: Rotor-Slave-ID EL (0 = Achse aus, 1…254), Default 21 — JSON rotor_el_id */
+uint8_t pwm_config_get_rotor_el_id(void);
+void pwm_config_set_rotor_el_id(uint8_t id);
 
 void pwm_config_set_slow(uint8_t pct);
 void pwm_config_set_fast(uint8_t pct);
@@ -53,6 +59,15 @@ void pwm_config_set_antdp(int idx, uint8_t v_0_or_1);
 /** Encoder-Variante (Rotor GETENCTYPE): 1 = Axis/Motor, 2 = Ring, 3 = erweiterter Ring (z. B. 420°) — nur vom Rotor */
 uint8_t pwm_config_get_enc_type(void);
 void pwm_config_set_enc_type(uint8_t type_1_to_3);
+
+/**
+ * EL-Rotortyp (GETROTORTYPE an EL-Slave): 1/2/3 — nur vom Rotor, nicht config.json.
+ * Typ 2 → EL 0…90°, Typ 3 (und 1) → EL 0…180°.
+ */
+uint8_t pwm_config_get_rotor_type(void);
+void pwm_config_set_rotor_type(uint8_t type_1_to_3);
+/** Wirksamer EL-Maxwinkel in Grad (90 oder 180) laut rotor_type. */
+float pwm_config_get_el_max_deg(void);
 
 /** Max-Winkel in Grad (Rotor GETMAXDG) — Rohwert vom Bus; wirksamer Span über pwm_config_get_axis_span_deg() */
 float pwm_config_get_axis_max_deg(void);
@@ -83,8 +98,8 @@ uint8_t pwm_config_get_encoder_delta_tenths(void);
 void pwm_config_set_encoder_delta_tenths(uint8_t tenths_1_or_10);
 
 /**
- * Antennenwechsel (GETCONCHA/SETCONCHA, JSON concha): 1 = Anzeige-Soll (taget) beibehalten, SETPOS für neue
- * Geometrie; 0 = taget auf aktuelle Ist-Anzeige (Kompass) setzen, kein zusätzliches SETPOS.
+ * Antennenwechsel (GETCONCHA/SETCONCHA, JSON concha): historisch 1 = Soll behalten + SETPOS;
+ * Anzeige zieht Ist und Soll beim Wechsel immer gleich (neuer Versatz). Flag bleibt für Bus/JSON.
  */
 uint8_t pwm_config_get_concha(void);
 void pwm_config_set_concha(uint8_t zero_or_one);

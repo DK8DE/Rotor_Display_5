@@ -3,6 +3,7 @@
   "fast_pwm": 100,
   "master_id": 2,
   "rotor_id": 20,
+  "rotor_el_id": 21,
   "antenna_1_label": "ANTENNE 1",
   "antenna_2_label": "ANTENNE 2",
   "antenna_3_label": "ANTENNE 3",
@@ -11,5 +12,5 @@
   "lsl": 14,
   "anemometer": 0,
   "encoder_delta": 1,
-  "concha": 1
+  "concha": 0
 }

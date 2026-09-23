@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,17 +35,46 @@ void rotor_app_apply_remote_antenna_selection_deferred(uint8_t prev_1_to_3, uint
 void rotor_app_encoder_step(int delta_tenths);
 void rotor_app_loop(void);
 
-/** Ist in Anzeige-Koordinaten (Bus + Antennenversatz der gewählten Antenne), wie LVGL-Arc — für NeoPixel-Ring. */
+/** 0 = Azimut, 1 = Elevation — aktive Achse (Hardware-Long-Press schaltet um). */
+uint8_t rotor_app_get_axis(void);
+/** AZ ↔ EL umschalten (Hintergrund, Arc, Slave-ID, Ist/Soll). */
+void rotor_app_toggle_axis(void);
+
+/**
+ * Boot/Status/Mitläufer: Ist + Referenz einer Achse in den App-Cache schreiben (ohne UI zu wechseln).
+ * axis: 0 = AZ, 1 = EL.
+ */
+void rotor_app_seed_axis_cache(uint8_t axis, float bus_ist_deg, bool referenced);
+
+/**
+ * Mitläufer: Soll einer inaktiven Achse aus Bus-SETPOSDG (Busgrad → Anzeige-Soll im Cache).
+ * axis: 0 = AZ, 1 = EL.
+ */
+void rotor_app_seed_axis_target_bus(uint8_t axis, float target_bus_deg);
+
+/** Mitläufer: nur Referenzstatus einer Achse setzen (Ist unverändert). */
+void rotor_app_seed_axis_referenced(uint8_t axis, bool referenced);
+
+/** Nach GETROTORTYPE / EL-Limit-Änderung: Arc-Range und Clamp neu anwenden (falls EL aktiv). */
+void rotor_app_el_limits_changed(void);
+
+/** Ist in Anzeige-Koordinaten — für NeoPixel-Ring (AZ: +Versatz; EL: 0…180). */
 float rotor_app_get_display_direction_deg(void);
+
+/** Soll in Anzeige-Koordinaten — für NeoPixel-Ring / Zielmarker. */
+float rotor_app_get_display_target_deg(void);
 
 /** Noch nicht abgearbeitete Encoder-Rasten ±1 (main.cpp); für on_target_deg: Bus nicht vor encoder_process_pending überschreiben. */
 int rotor_encoder_pending_detents(void);
 
-/** true: Fokus auf rotor_id/controller_id — main bündelt Encoder nicht (eine Raste = ein ID-Schritt). */
+/** true: Fokus auf rotor_az / rotor_el / controller_id — main bündelt Encoder nicht. */
 bool rotor_app_encoder_id_field_focused(void);
 
+/** true: Arc-Drag oder Encoder-Vorwahl (SETPOSCC) — kein Verbindungs-Watchdog. */
+bool rotor_app_is_ui_preview_active(void);
+
 /**
- * Hardware-Taster: wenn ein ID-Feld (rotor_id / controller_id) fokussiert ist — Fokus weg.
+ * Hardware-Taster: wenn ein ID-Feld fokussiert ist — Fokus weg.
  * Flash (config.json) nur wenn die Zahl gültig ist und sich von der gespeicherten unterscheidet.
  * @return true wenn behandelt (kein Homing/Stop/Snap in diesem Klick).
  */

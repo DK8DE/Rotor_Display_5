@@ -19,6 +19,7 @@ static uint8_t s_fast = 100;
 static uint8_t s_pwm_ui_fast = 1;
 static uint8_t s_master_id = 2;
 static uint8_t s_rotor_id = 20;
+static uint8_t s_rotor_el_id = 21;
 /** GETCONFRQ/SETCONFRQ — Touch-Pieps Frequenz (Hz) */
 static uint16_t s_touch_beep_freq_hz = 1100;
 /** GETLSL/SETLSL — Touch-Pieps Lautstärke (0…50, wie Signals::tone) */
@@ -28,7 +29,7 @@ static uint8_t s_anemometer = 0;
 /** GETCONDELTA/SETCONDELTA — Zehntel pro Encoder-Raste: 1 = 0,1° oder 10 = 1°; Standard 10 */
 static uint8_t s_encoder_delta_tenths = 10;
 /** GETCONCHA/SETCONCHA — Antennenwechsel: 1 = taget behalten, 0 = taget = Ist-Anzeige */
-static uint8_t s_concha = 1;
+static uint8_t s_concha = 0;
 /** GETCONLEDP/SETCONLEDP — NeoPixel-Ring global 0…100 % */
 static uint8_t s_led_ring_brightness_pct = 100;
 
@@ -39,6 +40,8 @@ static float s_opening_deg[3] = { 0.0f, 0.0f, 0.0f };
 static uint8_t s_antdp[3] = { 0, 0, 0 };
 /** GETENCTYPE: 1 = Axis, 2 = Ring, 3 = erweiterter Ring (z. B. 420°) — nur vom Rotor, nicht config.json */
 static uint8_t s_enc_type = 1;
+/** GETROTORTYPE (EL-Slave): 1/2/3 — Typ 2 = EL 0…90°, sonst 0…180° */
+static uint8_t s_rotor_type = 3;
 /** GETMAXDG in Grad (nach Umrechnung aus 0,01°-Einheiten falls nötig) */
 static float s_axis_max_deg = 360.0f;
 
@@ -126,14 +129,16 @@ void pwm_config_load_defaults(void)
     s_opening_deg[0] = s_opening_deg[1] = s_opening_deg[2] = 0.0f;
     s_antdp[0] = s_antdp[1] = s_antdp[2] = 0;
     s_enc_type = 1;
+    s_rotor_type = 3;
     s_axis_max_deg = 360.0f;
     s_master_id = 2;
     s_rotor_id = 20;
+    s_rotor_el_id = 21;
     s_touch_beep_freq_hz = 1100;
     s_touch_beep_vol = 14;
     s_anemometer = 0;
     s_encoder_delta_tenths = 10;
-    s_concha = 1;
+    s_concha = 0;
     s_led_ring_brightness_pct = 100;
 }
 
@@ -166,8 +171,12 @@ void pwm_config_load(void)
         s_master_id = (uint8_t)mid;
     }
     int rid = parse_int_after_key(buf, "rotor_id");
-    if (rid >= 1 && rid <= 254) {
+    if (rid >= 0 && rid <= 254) {
         s_rotor_id = (uint8_t)rid;
+    }
+    int reid = parse_int_after_key(buf, "rotor_el_id");
+    if (reid >= 0 && reid <= 254) {
+        s_rotor_el_id = (uint8_t)reid;
     }
     int la = parse_int_after_key(buf, "last_antenna");
     if (la >= 1 && la <= 3) {
@@ -218,6 +227,7 @@ void pwm_config_save(void)
              "  \"pwm_fast\": %u,\n"
              "  \"master_id\": %u,\n"
              "  \"rotor_id\": %u,\n"
+             "  \"rotor_el_id\": %u,\n"
              "  \"antenna_1_label\": \"%s\",\n"
              "  \"antenna_2_label\": \"%s\",\n"
              "  \"antenna_3_label\": \"%s\",\n"
@@ -230,7 +240,7 @@ void pwm_config_save(void)
              "  \"conledp\": %u\n"
              "}\n",
              (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_pwm_ui_fast, (unsigned)s_master_id,
-             (unsigned)s_rotor_id, e1, e2, e3,
+             (unsigned)s_rotor_id, (unsigned)s_rotor_el_id, e1, e2, e3,
              (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol,
              (unsigned)s_anemometer, (unsigned)s_encoder_delta_tenths, (unsigned)s_concha,
              (unsigned)s_led_ring_brightness_pct);
@@ -270,6 +280,16 @@ uint8_t pwm_config_get_rotor_id(void)
     return s_rotor_id;
 }
 
+uint8_t pwm_config_get_rotor_az_id(void)
+{
+    return s_rotor_id;
+}
+
+uint8_t pwm_config_get_rotor_el_id(void)
+{
+    return s_rotor_el_id;
+}
+
 void pwm_config_set_master_id(uint8_t id)
 {
     if (id >= 1u && id <= 254u) {
@@ -279,8 +299,20 @@ void pwm_config_set_master_id(uint8_t id)
 
 void pwm_config_set_rotor_id(uint8_t id)
 {
-    if (id >= 1u && id <= 254u) {
+    if (id <= 254u) {
         s_rotor_id = id;
+    }
+}
+
+void pwm_config_set_rotor_az_id(uint8_t id)
+{
+    pwm_config_set_rotor_id(id);
+}
+
+void pwm_config_set_rotor_el_id(uint8_t id)
+{
+    if (id <= 254u) {
+        s_rotor_el_id = id;
     }
 }
 
@@ -390,6 +422,24 @@ void pwm_config_set_enc_type(uint8_t type_1_to_3)
     if (type_1_to_3 >= 1u && type_1_to_3 <= 3u) {
         s_enc_type = type_1_to_3;
     }
+}
+
+uint8_t pwm_config_get_rotor_type(void)
+{
+    return s_rotor_type;
+}
+
+void pwm_config_set_rotor_type(uint8_t type_1_to_3)
+{
+    if (type_1_to_3 >= 1u && type_1_to_3 <= 3u) {
+        s_rotor_type = type_1_to_3;
+    }
+}
+
+float pwm_config_get_el_max_deg(void)
+{
+    /* Typ 2 = nur 0…90° Elevation; Typ 1/3 = 0…180°. */
+    return (s_rotor_type == 2u) ? 90.0f : 180.0f;
 }
 
 float pwm_config_get_axis_max_deg(void)

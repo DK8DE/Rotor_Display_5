@@ -210,7 +210,8 @@ static bool is_antenna_boot_read_frame(const uint8_t *data, size_t len)
            (remaining >= 8 && memcmp(data + cmd_start, "GETANGLE", 8) == 0) ||
            (remaining >= 10 && memcmp(data + cmd_start, "GETANTNAME", 10) == 0) ||
            (remaining >= 10 && memcmp(data + cmd_start, "GETENCTYPE", 10) == 0) ||
-           (remaining >= 8 && memcmp(data + cmd_start, "GETMAXDG", 8) == 0);
+           (remaining >= 8 && memcmp(data + cmd_start, "GETMAXDG", 8) == 0) ||
+           (remaining >= 12 && memcmp(data + cmd_start, "GETROTORTYPE", 12) == 0);
 }
 
 static void wait_bus_idle(uint32_t min_idle_us, uint32_t cap_ms)

@@ -13,7 +13,7 @@
 objects_t objects;
 
 static const char *screen_names[] = { "Main" };
-static const char *object_names[] = { "main", "kompass_el", "kompass_bg", "grad_acc", "grad_acc_el", "hauptanzeige", "position", "label_gradzeichen_a", "label_gradzeichen_t", "actual_dg", "taget_dg", "label_actual", "meldetext", "label_target", "homing_led", "fast_menue", "slow", "label__slow", "fast", "label_fast", "ref", "ref_label", "fast_menue_1", "antenna_1", "antenna_1_label", "antenna_2", "antenna_2_label", "antenna_3", "antenna_3_label", "temperaturen_wind", "label_wind_speed", "pfeil_wind", "label_aussen_temp", "temperature", "wind_speed", "rotor_info", "controller_id", "master_id_label", "rotor_az", "label_rotor_az", "rotor_el", "label_rotor_el", "motor_temperatur", "label_motortemperatur" };
+static const char *object_names[] = { "main", "kompass_bg", "grad_acc", "hauptanzeige", "position", "label_gradzeichen_a", "label_gradzeichen_t", "actual_dg", "taget_dg", "label_actual", "meldetext", "label_target", "homing_led", "fast_menue", "slow", "label__slow", "fast", "label_fast", "encoder_delta_bu", "encoder_delta_lable", "fast_menue_1", "antenna_1", "antenna_1_label", "antenna_2", "antenna_2_label", "antenna_3", "antenna_3_label", "temperaturen_wind", "label_wind_speed", "pfeil_wind", "label_aussen_temp", "temperature", "wind_speed", "rotor_info", "controller_id", "master_id_label", "rotor_id", "label_rotor_id", "motor_temperatur", "label_motortemperatur", "aussen_temperatur", "aussen_motortemperatur" };
 
 //
 // Event handlers
@@ -35,14 +35,6 @@ void create_screen_main() {
     {
         lv_obj_t *parent_obj = obj;
         {
-            // Kompass_EL
-            lv_obj_t *obj = lv_img_create(parent_obj);
-            objects.kompass_el = obj;
-            lv_obj_set_pos(obj, 0, -1);
-            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-            lv_img_set_src(obj, "S:/img/ui_image_kompass_el.bin");
-        }
-        {
             // Kompass_BG
             lv_obj_t *obj = lv_img_create(parent_obj);
             objects.kompass_bg = obj;
@@ -63,22 +55,6 @@ void create_screen_main() {
             lv_arc_set_bg_start_angle(obj, 0);
             lv_arc_set_bg_end_angle(obj, 360);
             lv_arc_set_rotation(obj, 270);
-            lv_obj_add_state(obj, LV_STATE_FOCUSED|LV_STATE_FOCUS_KEY);
-            lv_obj_set_style_arc_rounded(obj, true, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_arc_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-        }
-        {
-            // Grad_acc_EL
-            lv_obj_t *obj = lv_arc_create(parent_obj);
-            objects.grad_acc_el = obj;
-            lv_obj_set_pos(obj, 14, 15);
-            lv_obj_set_size(obj, 438, 437);
-            lv_arc_set_range(obj, -1, 181);
-            lv_arc_set_value(obj, 0);
-            lv_arc_set_mode(obj, LV_ARC_MODE_SYMMETRICAL);
-            lv_arc_set_bg_start_angle(obj, 0);
-            lv_arc_set_bg_end_angle(obj, 180);
-            lv_arc_set_rotation(obj, 180);
             lv_obj_add_state(obj, LV_STATE_FOCUSED|LV_STATE_FOCUS_KEY);
             lv_obj_set_style_arc_rounded(obj, true, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_arc_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -220,8 +196,8 @@ void create_screen_main() {
                             // Slow
                             lv_obj_t *obj = lv_btn_create(parent_obj);
                             objects.slow = obj;
-                            lv_obj_set_pos(obj, 51, 24);
-                            lv_obj_set_size(obj, 158, 44);
+                            lv_obj_set_pos(obj, 51, 20);
+                            lv_obj_set_size(obj, 158, 55);
                             lv_obj_set_style_bg_color(obj, lv_color_hex(0xff2196f3), LV_PART_MAIN | LV_STATE_DEFAULT);
                             {
                                 lv_obj_t *parent_obj = obj;
@@ -232,7 +208,8 @@ void create_screen_main() {
                                     lv_obj_set_pos(obj, 0, 0);
                                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_label_set_text(obj, "Slow");
                                 }
                             }
@@ -241,8 +218,8 @@ void create_screen_main() {
                             // Fast
                             lv_obj_t *obj = lv_btn_create(parent_obj);
                             objects.fast = obj;
-                            lv_obj_set_pos(obj, 50, 105);
-                            lv_obj_set_size(obj, 158, 44);
+                            lv_obj_set_pos(obj, 51, 101);
+                            lv_obj_set_size(obj, 158, 55);
                             {
                                 lv_obj_t *parent_obj = obj;
                                 {
@@ -252,27 +229,29 @@ void create_screen_main() {
                                     lv_obj_set_pos(obj, 0, 0);
                                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_label_set_text(obj, "Fast");
                                 }
                             }
                         }
                         {
-                            // REF
+                            // EncoderDeltaBu
                             lv_obj_t *obj = lv_btn_create(parent_obj);
-                            objects.ref = obj;
+                            objects.encoder_delta_bu = obj;
                             lv_obj_set_pos(obj, 50, 184);
-                            lv_obj_set_size(obj, 158, 44);
+                            lv_obj_set_size(obj, 158, 55);
                             {
                                 lv_obj_t *parent_obj = obj;
                                 {
-                                    // REF LABEL
+                                    // EncoderDeltaLable
                                     lv_obj_t *obj = lv_label_create(parent_obj);
-                                    objects.ref_label = obj;
+                                    objects.encoder_delta_lable = obj;
                                     lv_obj_set_pos(obj, 0, 0);
                                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_label_set_text(obj, "Homing");
                                 }
                             }
@@ -294,8 +273,8 @@ void create_screen_main() {
                             // Antenna 1
                             lv_obj_t *obj = lv_btn_create(parent_obj);
                             objects.antenna_1 = obj;
-                            lv_obj_set_pos(obj, 37, 28);
-                            lv_obj_set_size(obj, 185, 44);
+                            lv_obj_set_pos(obj, 37, 20);
+                            lv_obj_set_size(obj, 185, 55);
                             lv_obj_set_style_bg_color(obj, lv_color_hex(0xff087321), LV_PART_MAIN | LV_STATE_DEFAULT);
                             {
                                 lv_obj_t *parent_obj = obj;
@@ -306,7 +285,8 @@ void create_screen_main() {
                                     lv_obj_set_pos(obj, 1, -1);
                                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_color(obj, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_label_set_text(obj, "KW Beam");
                                 }
                             }
@@ -315,8 +295,8 @@ void create_screen_main() {
                             // Antenna 2
                             lv_obj_t *obj = lv_btn_create(parent_obj);
                             objects.antenna_2 = obj;
-                            lv_obj_set_pos(obj, 37, 106);
-                            lv_obj_set_size(obj, 185, 44);
+                            lv_obj_set_pos(obj, 37, 99);
+                            lv_obj_set_size(obj, 185, 55);
                             {
                                 lv_obj_t *parent_obj = obj;
                                 {
@@ -326,7 +306,8 @@ void create_screen_main() {
                                     lv_obj_set_pos(obj, 5, 0);
                                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_label_set_text(obj, "2m / 70cm");
                                 }
                             }
@@ -335,8 +316,8 @@ void create_screen_main() {
                             // Antenna 3
                             lv_obj_t *obj = lv_btn_create(parent_obj);
                             objects.antenna_3 = obj;
-                            lv_obj_set_pos(obj, 37, 180);
-                            lv_obj_set_size(obj, 185, 44);
+                            lv_obj_set_pos(obj, 37, 178);
+                            lv_obj_set_size(obj, 185, 55);
                             {
                                 lv_obj_t *parent_obj = obj;
                                 {
@@ -346,7 +327,8 @@ void create_screen_main() {
                                     lv_obj_set_pos(obj, 0, 0);
                                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                                     lv_obj_set_style_align(obj, LV_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                                    lv_obj_set_style_text_color(obj, lv_color_hex(0xff000000), LV_PART_MAIN | LV_STATE_DEFAULT);
                                     lv_label_set_text(obj, "23 cm");
                                 }
                             }
@@ -438,7 +420,7 @@ void create_screen_main() {
                             // Controller_ID
                             lv_obj_t *obj = lv_textarea_create(parent_obj);
                             objects.controller_id = obj;
-                            lv_obj_set_pos(obj, 22, 35);
+                            lv_obj_set_pos(obj, 31, 27);
                             lv_obj_set_size(obj, 69, 37);
                             lv_textarea_set_max_length(obj, 3);
                             lv_textarea_set_text(obj, "2");
@@ -453,16 +435,16 @@ void create_screen_main() {
                             // Master ID Label
                             lv_obj_t *obj = lv_label_create(parent_obj);
                             objects.master_id_label = obj;
-                            lv_obj_set_pos(obj, 109, 39);
+                            lv_obj_set_pos(obj, 109, 32);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_label_set_text(obj, "Eigene ID");
                         }
                         {
-                            // Rotor_AZ
+                            // Rotor_ID
                             lv_obj_t *obj = lv_textarea_create(parent_obj);
-                            objects.rotor_az = obj;
-                            lv_obj_set_pos(obj, 22, 85);
+                            objects.rotor_id = obj;
+                            lv_obj_set_pos(obj, 31, 80);
                             lv_obj_set_size(obj, 69, 37);
                             lv_textarea_set_max_length(obj, 3);
                             lv_textarea_set_text(obj, "20");
@@ -474,43 +456,19 @@ void create_screen_main() {
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
                         }
                         {
-                            // Label Rotor AZ
+                            // Label Rotor ID
                             lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.label_rotor_az = obj;
-                            lv_obj_set_pos(obj, 109, 90);
+                            objects.label_rotor_id = obj;
+                            lv_obj_set_pos(obj, 109, 84);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_label_set_text(obj, "Rotor AZ");
-                        }
-                        {
-                            // Rotor_EL
-                            lv_obj_t *obj = lv_textarea_create(parent_obj);
-                            objects.rotor_el = obj;
-                            lv_obj_set_pos(obj, 22, 134);
-                            lv_obj_set_size(obj, 69, 37);
-                            lv_textarea_set_max_length(obj, 3);
-                            lv_textarea_set_text(obj, "21");
-                            lv_textarea_set_placeholder_text(obj, "21");
-                            lv_textarea_set_one_line(obj, true);
-                            lv_textarea_set_password_mode(obj, false);
-                            lv_obj_add_flag(obj, LV_OBJ_FLAG_CHECKABLE);
-                            add_style_grosse_zahlen(obj);
-                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
-                        }
-                        {
-                            // Label Rotor EL
-                            lv_obj_t *obj = lv_label_create(parent_obj);
-                            objects.label_rotor_el = obj;
-                            lv_obj_set_pos(obj, 109, 138);
-                            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
-                            lv_label_set_text(obj, "Rotor EL");
+                            lv_label_set_text(obj, "Rotor ID");
                         }
                         {
                             // Motor_Temperatur
                             lv_obj_t *obj = lv_textarea_create(parent_obj);
                             objects.motor_temperatur = obj;
-                            lv_obj_set_pos(obj, 22, 183);
+                            lv_obj_set_pos(obj, 31, 189);
                             lv_obj_set_size(obj, 69, 37);
                             lv_textarea_set_max_length(obj, 128);
                             lv_textarea_set_text(obj, "25.1");
@@ -524,10 +482,33 @@ void create_screen_main() {
                             // Label Motortemperatur
                             lv_obj_t *obj = lv_label_create(parent_obj);
                             objects.label_motortemperatur = obj;
-                            lv_obj_set_pos(obj, 109, 187);
+                            lv_obj_set_pos(obj, 109, 192);
                             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                             lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
                             lv_label_set_text(obj, "°C Motor");
+                        }
+                        {
+                            // Aussen_Temperatur
+                            lv_obj_t *obj = lv_textarea_create(parent_obj);
+                            objects.aussen_temperatur = obj;
+                            lv_obj_set_pos(obj, 31, 135);
+                            lv_obj_set_size(obj, 69, 37);
+                            lv_textarea_set_max_length(obj, 128);
+                            lv_textarea_set_text(obj, "25.1");
+                            lv_textarea_set_one_line(obj, true);
+                            lv_textarea_set_password_mode(obj, false);
+                            lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_CLICK_FOCUSABLE);
+                            add_style_grosse_zahlen(obj);
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                        }
+                        {
+                            // Aussen Motortemperatur
+                            lv_obj_t *obj = lv_label_create(parent_obj);
+                            objects.aussen_motortemperatur = obj;
+                            lv_obj_set_pos(obj, 109, 139);
+                            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                            lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);
+                            lv_label_set_text(obj, "°C Aussen");
                         }
                     }
                 }

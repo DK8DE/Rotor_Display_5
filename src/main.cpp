@@ -232,7 +232,10 @@ static void SingleClickCb(void *button_handle, void *usr_data)
         const float snap = rotor_rs485_get_last_position_deg();
         rotor_app_snap_target_to_deg(snap);
         rotor_rs485_hw_snap_retarget_request(snap);
-    } else if (!rotor_rs485_is_referenced()) {
+    } else if (!rotor_rs485_is_referenced() && rotor_rs485_is_ref_state_known()) {
+        /* Referenzfahrt nur für die per Long-Press aktive Achse und erst, wenn deren
+         * Referenzstatus per GETREF bestätigt ist — sonst homt ein Klick direkt nach dem
+         * Achsenwechsel eine bereits referenzierte Achse. */
         rotor_rs485_send_setref_homing();
     }
     lvgl_port_lock(-1);
@@ -247,6 +250,13 @@ static void DoubleClickCb(void *button_handle, void *usr_data)
 static void LongPressStartCb(void *button_handle, void *usr_data) {
     (void)button_handle;
     (void)usr_data;
+    if (rotor_error_app_is_fault_locked()) {
+        lvgl_port_lock(-1);
+        LVGL_button_event((void *)(intptr_t)BUTTON_LONG_PRESS_START);
+        lvgl_port_unlock();
+        return;
+    }
+    rotor_app_toggle_axis();
     lvgl_port_lock(-1);
     LVGL_button_event((void*)(intptr_t)BUTTON_LONG_PRESS_START);
     lvgl_port_unlock();
@@ -303,6 +313,8 @@ void setup()
 
     Serial.println("Initialize Button device");
     Button *btn = new Button(GPIO_BUTTON_PIN, false);
+    /* AZ↔EL: Long-Press halb so lang wie Library-Default (1500 → 750 ms). */
+    btn->setParam(BUTTON_LONG_PRESS_TIME_MS, (void *)(intptr_t)450);
     btn->attachSingleClickEventCb(&SingleClickCb, NULL);
     btn->attachDoubleClickEventCb(&DoubleClickCb, NULL);
     btn->attachLongPressStartEventCb(&LongPressStartCb, NULL);

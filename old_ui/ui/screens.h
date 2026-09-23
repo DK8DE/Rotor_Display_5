@@ -17,10 +17,8 @@ enum ScreensEnum {
 
 typedef struct _objects_t {
     lv_obj_t *main;
-    lv_obj_t *kompass_el;
     lv_obj_t *kompass_bg;
     lv_obj_t *grad_acc;
-    lv_obj_t *grad_acc_el;
     lv_obj_t *hauptanzeige;
     lv_obj_t *position;
     lv_obj_t *label_gradzeichen_a;
@@ -36,8 +34,8 @@ typedef struct _objects_t {
     lv_obj_t *label__slow;
     lv_obj_t *fast;
     lv_obj_t *label_fast;
-    lv_obj_t *ref;
-    lv_obj_t *ref_label;
+    lv_obj_t *encoder_delta_bu;
+    lv_obj_t *encoder_delta_lable;
     lv_obj_t *fast_menue_1;
     lv_obj_t *antenna_1;
     lv_obj_t *antenna_1_label;
@@ -54,12 +52,12 @@ typedef struct _objects_t {
     lv_obj_t *rotor_info;
     lv_obj_t *controller_id;
     lv_obj_t *master_id_label;
-    lv_obj_t *rotor_az;
-    lv_obj_t *label_rotor_az;
-    lv_obj_t *rotor_el;
-    lv_obj_t *label_rotor_el;
+    lv_obj_t *rotor_id;
+    lv_obj_t *label_rotor_id;
     lv_obj_t *motor_temperatur;
     lv_obj_t *label_motortemperatur;
+    lv_obj_t *aussen_temperatur;
+    lv_obj_t *aussen_motortemperatur;
 } objects_t;
 
 extern objects_t objects;

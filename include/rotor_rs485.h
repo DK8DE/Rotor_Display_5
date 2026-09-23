@@ -32,6 +32,9 @@ typedef void (*rotor_rs485_target_cb_t)(float deg_deg);
 void rotor_rs485_set_master_id(uint8_t id);
 void rotor_rs485_set_slave_id(uint8_t id);
 
+/** GETROTORTYPE an die EL-Slave-ID (0…90 vs 0…180); no-op wenn EL aus oder Bus busy. */
+void rotor_rs485_request_el_rotor_type(void);
+
 /** Synchronisations-Primitiven (Parser-Mutex) anlegen. Muss VOR serial_bridge::begin()
  * aufgerufen werden, da task_rs485_rx und task_arbiter konkurrent rotor_rs485_rx_bytes nutzen. */
 void rotor_rs485_pre_begin(void);
@@ -95,6 +98,12 @@ void rotor_rs485_send_getposdg(void);
 /** Letzter bekannter Referenzstatus (zuletzt ACK_GETREF). */
 bool rotor_rs485_is_referenced(void);
 
+/** Achsenwechsel: Referenzstatus der neuen Achse aus dem App-Cache vorbelegen (bis eigenes GETREF). */
+void rotor_rs485_seed_referenced(bool referenced);
+
+/** false zwischen Achsenwechsel und dem bestätigenden ACK_GETREF der neuen Slave-ID. */
+bool rotor_rs485_is_ref_state_known(void);
+
 /**
  * Rotor „fährt“ aus Sicht des Masters: Positions-Polling aktiv oder Homing-Polling.
  * (Kein separates Motor-Flag vom Slave.)
@@ -141,6 +150,12 @@ bool rotor_rs485_goto_degrees(float deg);
 void rotor_rs485_send_setposcc_degrees(float deg);
 
 /**
+ * Nach Arc-/Encoder-SETPOSCC-Vorschau: Verbindungs-Watchdog neu armieren
+ * (s_last_slave_rx_ms war während der Pause stehengeblieben).
+ */
+void rotor_rs485_arm_conn_watchdog(void);
+
+/**
  * HW-Taster „Ziel = aktuelle Position“: SETPOSDG mit deg wiederholt senden, bis der Bus frei ist
  * und ACK_SETPOSDG eintrifft (sonst Retry in rotor_rs485_loop nach Timeout / wenn goto_degrees fehlschlug).
  */
@@ -153,7 +168,8 @@ void rotor_rs485_hw_snap_retarget_request(float deg);
 bool rotor_rs485_send_set_pwm_limit(uint8_t pct);
 
 /**
- * SETASELECT:1…3 an Broadcast (255), kein ACK — gleicher Pfad wie andere Befehle (USB + RS485).
+ * SETASELECT:1…3 an die AZ-Rotor-ID (Speicher im AZ), kein Pending/ACK-Pflicht.
+ * Bei AZ-ID 0 (nur EL) no-op.
  */
 void rotor_rs485_send_setaselect(uint8_t antenna_1_to_3);
 

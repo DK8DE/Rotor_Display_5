@@ -37,6 +37,8 @@ static int s_arc_value_at_press = 0;
 static uint32_t s_arc_drag_cc_next_ms = 0;
 static float s_arc_drag_last_disp_deg = 0.0f;
 static bool s_arc_drag_cc_have_deg = false;
+/** Bus-Ist beim Arc-Press — shortest-path stabil während Drag. */
+static float s_arc_drag_bus_ref_deg = 0.0f;
 static constexpr uint32_t ARC_DRAG_SETPOSCC_MS = 100u;
 static bool s_arc_updating = false;
 /** Encoder: Soll einstellen, Ist-Nachführung am Arc aus */
@@ -66,8 +68,62 @@ static constexpr uint32_t ENCODER_SEND_IDLE_MS_FOREIGN_PC = 240;
 static constexpr bool ENCODER_MOVES_ARC = true;
 
 /** Tab Rotor_Info: Encoder/Tippen nur Vorschau; Flash nur per HW-Taster und nur bei geänderter Zahl */
-enum class IdFieldFocus : uint8_t { None = 0, RotorId, ControllerId };
+enum class IdFieldFocus : uint8_t { None = 0, RotorAz, RotorEl, ControllerId };
 static IdFieldFocus s_id_field_focus = IdFieldFocus::None;
+
+enum class AxisMode : uint8_t { Az = 0, El = 1 };
+static AxisMode s_axis = AxisMode::Az;
+
+struct AxisCache {
+    float bus_ist_deg = 0.0f;
+    float target_deg = 0.0f;
+    int tenths = 0;
+    bool dipole_back = false;
+    bool referenced = false;
+    bool have = false;
+};
+static AxisCache s_axis_cache[2];
+
+/** Zielmarker (Definition hier; Init/Refresh weiter unten). */
+static lv_obj_t *s_arc_target_marker = nullptr;
+static int s_arc_target_int_cached = -32768;
+static bool s_arc_target_visible = false;
+
+static bool axis_is_el(void)
+{
+    return s_axis == AxisMode::El;
+}
+
+static float axis_span_deg(void)
+{
+    return axis_is_el() ? pwm_config_get_el_max_deg() : pwm_config_get_axis_span_deg();
+}
+
+static uint8_t axis_slave_id(void)
+{
+    return axis_is_el() ? pwm_config_get_rotor_el_id() : pwm_config_get_rotor_id();
+}
+
+static float clamp_el_deg(float d)
+{
+    const float el_max = pwm_config_get_el_max_deg();
+    if (d < 0.0f) {
+        return 0.0f;
+    }
+    if (d > el_max) {
+        return el_max;
+    }
+    return d;
+}
+
+/** Aktiver Ist-Arc: AZ = grad_acc, EL = grad_acc_el (EEZ-Geometrie unverändert). */
+static lv_obj_t *active_grad_acc(void)
+{
+    if (axis_is_el() && objects.grad_acc_el) {
+        return objects.grad_acc_el;
+    }
+    return objects.grad_acc;
+}
 /** Verhindert Rekursion bei lv_textarea_set_text → VALUE_CHANGED */
 static bool s_id_field_programmatic_text = false;
 
@@ -144,14 +200,28 @@ static void antenna_apply_style(uint8_t active_1_to_3)
 {
     const lv_color_t c_on = lv_color_hex(0x087321);
     const lv_color_t c_off = lv_color_hex(0x2196f3);
+    const lv_color_t c_disabled = lv_color_hex(0x607d8b);
     const lv_color_t c_txt_on_green = lv_color_hex(0xFFFFFF);
     const lv_color_t c_txt_on_blue = lv_color_hex(0x000000);
+    const lv_color_t c_txt_disabled = lv_color_hex(0x90a4ae);
+    const bool az_ok = (pwm_config_get_rotor_id() != 0u);
     lv_obj_t *btns[3] = { objects.antenna_1, objects.antenna_2, objects.antenna_3 };
     lv_obj_t *labels[3] = { objects.antenna_1_label, objects.antenna_2_label, objects.antenna_3_label };
     for (uint8_t i = 0; i < 3; i++) {
         if (!btns[i]) {
             continue;
         }
+        if (!az_ok) {
+            lv_obj_clear_flag(btns[i], LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_state(btns[i], LV_STATE_DISABLED);
+            lv_obj_set_style_bg_color(btns[i], c_disabled, LV_PART_MAIN);
+            if (labels[i]) {
+                lv_obj_set_style_text_color(labels[i], c_txt_disabled, LV_PART_MAIN);
+            }
+            continue;
+        }
+        lv_obj_clear_state(btns[i], LV_STATE_DISABLED);
+        lv_obj_add_flag(btns[i], LV_OBJ_FLAG_CLICKABLE);
         const bool on = (active_1_to_3 == (uint8_t)(i + 1));
         lv_obj_set_style_bg_color(btns[i], on ? c_on : c_off, LV_PART_MAIN);
         if (labels[i]) {
@@ -168,19 +238,28 @@ extern "C" void rotor_app_apply_remote_antenna_selection_deferred(uint8_t prev_1
     if (prev_1_to_3 == n_1_to_3) {
         return;
     }
+    /* Ohne AZ: Antennenwahl deaktiviert — Bus-Telegramme ignorieren. */
+    if (pwm_config_get_rotor_id() == 0u) {
+        return;
+    }
     pwm_config_set_last_antenna(n_1_to_3);
     pwm_config_save();
-    rotor_rs485_send_setaselect(n_1_to_3);
+    /* Kein erneutes SETASELECT — kommt vom AZ/Fremd-Master; Display nur UI/Cache. */
     lvgl_port_lock(-1);
     antenna_apply_style(n_1_to_3);
-    /* Mitläufer (fremder Master): kein eigenes SETPOSDG — PC-Software sendet Soll; nur Anzeige/Arc anpassen. */
-    rotor_app_antenna_switch_from_ui(prev_1_to_3, !rotor_rs485_is_foreign_pc_listen_mode());
+    /* Antenne nur AZ; auf EL kein SETPOSDG an die aktive EL-ID. */
+    if (!axis_is_el()) {
+        rotor_app_antenna_switch_from_ui(prev_1_to_3, !rotor_rs485_is_foreign_pc_listen_mode());
+    }
     lvgl_port_unlock();
 }
 
 static void on_antenna_btn(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
+    if (pwm_config_get_rotor_id() == 0u) {
         return;
     }
     if (rotor_error_app_is_fault_locked()) {
@@ -202,6 +281,10 @@ static void on_antenna_btn(lv_event_t *e)
     pwm_config_save();
     antenna_apply_style(n);
     rotor_rs485_send_setaselect(n);
+    /* Antennenwahl gilt nur für AZ — auf EL kein SETPOSDG / keine EL-Soll-Umrechnung. */
+    if (axis_is_el()) {
+        return;
+    }
     rotor_app_antenna_switch_from_ui(prev, true);
 }
 
@@ -235,17 +318,18 @@ static void apply_anemometer_weather_tab_visibility(void)
     lv_obj_invalidate(tv);
 }
 
-/** Beschriftung auf encoder_delta_bu (Label-Kind): aktive Schrittweite */
+/** Beschriftung Encoder-Schrittweite auf dem ehemaligen Homing-/Delta-Button (ref_label). */
 static void encoder_delta_apply_button_label(void)
 {
-    if (!objects.encoder_delta_lable) {
+    if (!objects.ref_label) {
         return;
     }
-    const uint8_t d = pwm_config_get_encoder_delta_tenths();
-    const char *txt = (d >= 10u) ? "1 Grad" : "0,1 Grad";
-    lv_label_set_text(objects.encoder_delta_lable, txt);
+    const uint8_t t = pwm_config_get_encoder_delta_tenths();
+    lv_label_set_text(objects.ref_label, (t == 1u) ? "0,1 Deg" : "1 Deg");
+    lv_obj_set_style_text_color(objects.ref_label, lv_color_hex(0x000000), LV_PART_MAIN);
 }
 
+/** UI-Button: Encoder-Schritt 0,1° ↔ 1° (wirkt für die aktive Achse). */
 static void on_encoder_delta_btn(lv_event_t *e)
 {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
@@ -256,8 +340,8 @@ static void on_encoder_delta_btn(lv_event_t *e)
     }
     touch_feedback_button_click();
     const uint8_t cur = pwm_config_get_encoder_delta_tenths();
-    const uint8_t next = (cur >= 10u) ? 1u : 10u;
-    pwm_config_set_encoder_delta_tenths(next);
+    const uint8_t nv = (cur == 1u) ? 10u : 1u;
+    pwm_config_set_encoder_delta_tenths(nv);
     pwm_config_save();
     encoder_delta_apply_button_label();
 }
@@ -290,12 +374,13 @@ static void id_fields_set_text(lv_obj_t *ta, unsigned id_1_to_254)
 /** Nach load / RS485-SET: Anzeige = config (ohne Fokus auf ID-Felder zu ändern) */
 static void id_fields_sync_textareas_from_config(void)
 {
-    id_fields_set_text(objects.rotor_id, pwm_config_get_rotor_id());
+    id_fields_set_text(objects.rotor_az, pwm_config_get_rotor_id());
+    id_fields_set_text(objects.rotor_el, pwm_config_get_rotor_el_id());
     id_fields_set_text(objects.controller_id, pwm_config_get_master_id());
 }
 
-/** Nur parsen (1…254), kein Schreiben */
-static bool id_field_parse_ta_id(lv_obj_t *ta, uint8_t *out)
+/** Nur parsen; min_id…254 (EL: min_id=0 = Achse aus) */
+static bool id_field_parse_ta_id(lv_obj_t *ta, uint8_t *out, uint8_t min_id)
 {
     if (!ta || !out) {
         return false;
@@ -321,33 +406,72 @@ static bool id_field_parse_ta_id(lv_obj_t *ta, uint8_t *out)
     if (*end != '\0') {
         return false;
     }
-    if (v < 1L || v > 254L) {
+    if (v < static_cast<long>(min_id) || v > 254L) {
         return false;
     }
     *out = static_cast<uint8_t>(v);
     return true;
 }
 
+static void apply_axis_background(void);
+static void apply_axis_arc_geometry(void);
+static void apply_axis_ui_after_switch(void);
+static void axis_cache_store_current(void);
+static void axis_cache_restore(AxisMode mode);
+
+/** Nach Commit EL=0 → AZ bzw. AZ=0 → EL: UI umschalten (ohne erneutes LVGL-Lock). */
+static bool s_pending_force_axis_az_ui = false;
+static bool s_pending_force_axis_el_ui = false;
+
 /**
  * Nur beim HW-Taster: gültige Zahl → bei Abweichung von der Config RS485 + pwm_config_save();
  * gleicher Wert → nur Text normalisieren, kein Flash-Schreiben.
- * @return false bei ungültigem Inhalt (kein save).
+ * kind: 0=AZ (0 = Achse aus), 1=EL (0 = Achse aus), 2=Master
  */
-static bool id_field_try_commit_text(lv_obj_t *ta, bool is_rotor_id)
+static bool id_field_try_commit_text(lv_obj_t *ta, uint8_t kind)
 {
     if (!ta) {
         return false;
     }
     uint8_t nv = 0;
-    if (!id_field_parse_ta_id(ta, &nv)) {
+    const uint8_t min_id = (kind == 2) ? 1u : 0u;
+    if (!id_field_parse_ta_id(ta, &nv, min_id)) {
         return false;
     }
-    const uint8_t cur =
-        is_rotor_id ? pwm_config_get_rotor_id() : pwm_config_get_master_id();
+    uint8_t cur = 0;
+    if (kind == 0) {
+        cur = pwm_config_get_rotor_id();
+    } else if (kind == 1) {
+        cur = pwm_config_get_rotor_el_id();
+    } else {
+        cur = pwm_config_get_master_id();
+    }
     if (nv != cur) {
-        if (is_rotor_id) {
+        if (kind == 0) {
             pwm_config_set_rotor_id(nv);
-            rotor_rs485_set_slave_id(nv);
+            if (nv == 0u) {
+                const uint8_t el = pwm_config_get_rotor_el_id();
+                if (el != 0u && !axis_is_el()) {
+                    axis_cache_store_current();
+                    s_axis = AxisMode::El;
+                    rotor_rs485_set_slave_id(el);
+                    axis_cache_restore(AxisMode::El);
+                    s_pending_force_axis_el_ui = true;
+                }
+            } else if (!axis_is_el()) {
+                rotor_rs485_set_slave_id(nv);
+            }
+        } else if (kind == 1) {
+            pwm_config_set_rotor_el_id(nv);
+            if (nv == 0 && axis_is_el()) {
+                axis_cache_store_current();
+                s_axis = AxisMode::Az;
+                rotor_rs485_set_slave_id(pwm_config_get_rotor_id());
+                axis_cache_restore(AxisMode::Az);
+                s_pending_force_axis_az_ui = true;
+            } else if (axis_is_el() && nv != 0) {
+                rotor_rs485_set_slave_id(nv);
+            }
         } else {
             pwm_config_set_master_id(nv);
             rotor_rs485_set_master_id(nv);
@@ -358,13 +482,20 @@ static bool id_field_try_commit_text(lv_obj_t *ta, bool is_rotor_id)
     return true;
 }
 
-static uint8_t id_field_display_or_saved_config(lv_obj_t *ta, bool is_rotor_id)
+static uint8_t id_field_display_or_saved_config(lv_obj_t *ta, uint8_t kind)
 {
     uint8_t v = 0;
-    if (id_field_parse_ta_id(ta, &v)) {
+    const uint8_t min_id = (kind == 1) ? 0u : 1u;
+    if (id_field_parse_ta_id(ta, &v, min_id)) {
         return v;
     }
-    return is_rotor_id ? pwm_config_get_rotor_id() : pwm_config_get_master_id();
+    if (kind == 0) {
+        return pwm_config_get_rotor_id();
+    }
+    if (kind == 1) {
+        return pwm_config_get_rotor_el_id();
+    }
+    return pwm_config_get_master_id();
 }
 
 static void id_field_blur(lv_obj_t *ta)
@@ -386,20 +517,39 @@ extern "C" bool rotor_app_commit_id_field_on_hw_click(void)
         return false;
     }
     lvgl_port_lock(-1);
-    const bool is_rotor = (s_id_field_focus == IdFieldFocus::RotorId);
-    lv_obj_t *const ta = is_rotor ? objects.rotor_id : objects.controller_id;
+    uint8_t kind = 2;
+    lv_obj_t *ta = objects.controller_id;
+    if (s_id_field_focus == IdFieldFocus::RotorAz) {
+        kind = 0;
+        ta = objects.rotor_az;
+    } else if (s_id_field_focus == IdFieldFocus::RotorEl) {
+        kind = 1;
+        ta = objects.rotor_el;
+    }
     if (!ta) {
         s_id_field_focus = IdFieldFocus::None;
         lvgl_port_unlock();
         return false;
     }
-    if (!id_field_try_commit_text(ta, is_rotor)) {
-        const uint8_t id = is_rotor ? pwm_config_get_rotor_id() : pwm_config_get_master_id();
-        id_fields_set_text(ta, id);
+    if (!id_field_try_commit_text(ta, kind)) {
+        id_fields_set_text(ta, id_field_display_or_saved_config(ta, kind));
     }
+    bool need_getref = false;
+    if (s_pending_force_axis_az_ui || s_pending_force_axis_el_ui) {
+        s_pending_force_axis_az_ui = false;
+        s_pending_force_axis_el_ui = false;
+        apply_axis_background();
+        apply_axis_arc_geometry();
+        apply_axis_ui_after_switch();
+        need_getref = true;
+    }
+    antenna_apply_style(pwm_config_get_last_antenna());
     id_field_blur(ta);
     s_id_field_focus = IdFieldFocus::None;
     lvgl_port_unlock();
+    if (need_getref) {
+        rotor_rs485_send_getref();
+    }
     return true;
 }
 
@@ -410,13 +560,19 @@ static void on_id_field_event(lv_event_t *e)
         return;
     }
     lv_obj_t *ta = lv_event_get_target(e);
-    const bool is_rotor = (ta == objects.rotor_id);
+    uint8_t kind = 2;
+    IdFieldFocus focus = IdFieldFocus::ControllerId;
+    if (ta == objects.rotor_az) {
+        kind = 0;
+        focus = IdFieldFocus::RotorAz;
+    } else if (ta == objects.rotor_el) {
+        kind = 1;
+        focus = IdFieldFocus::RotorEl;
+    }
 
     if (code == LV_EVENT_FOCUSED) {
-        s_id_field_focus = is_rotor ? IdFieldFocus::RotorId : IdFieldFocus::ControllerId;
-        const uint8_t id = is_rotor ? pwm_config_get_rotor_id() : pwm_config_get_master_id();
-        id_fields_set_text(ta, id);
-        /* Encoder soll Winkel nicht weiter bedienen; Bus darf taget_dg wieder nachführen */
+        s_id_field_focus = focus;
+        id_fields_set_text(ta, id_field_display_or_saved_config(ta, kind));
         s_encoder_adjusting = false;
         s_encoder_goto_retry_pending = false;
         s_encoder_retry_deadline_ms = 0;
@@ -424,9 +580,7 @@ static void on_id_field_event(lv_event_t *e)
         return;
     }
     if (code == LV_EVENT_DEFOCUSED) {
-        /* Kein Flash-Schreiben beim Verlassen — nur gespeicherten Wert anzeigen */
-        const uint8_t id = is_rotor ? pwm_config_get_rotor_id() : pwm_config_get_master_id();
-        id_fields_set_text(ta, id);
+        id_fields_set_text(ta, id_field_display_or_saved_config(ta, kind));
         s_id_field_focus = IdFieldFocus::None;
         return;
     }
@@ -434,7 +588,6 @@ static void on_id_field_event(lv_event_t *e)
         if (s_id_field_programmatic_text) {
             return;
         }
-        /* Tippen: nur Vorschau; Speichern nur per HW-Taster wenn Zahl sich geändert hat */
         return;
     }
 }
@@ -447,7 +600,7 @@ extern "C" void rotor_app_config_changed_from_bus(void)
     s_pwm_ui_is_fast = pwm_config_get_pwm_ui_fast() != 0;
     pwm_style_slow_fast(s_pwm_ui_is_fast);
     rotor_rs485_set_master_id(pwm_config_get_master_id());
-    rotor_rs485_set_slave_id(pwm_config_get_rotor_id());
+    rotor_rs485_set_slave_id(axis_slave_id());
     id_fields_sync_textareas_from_config();
     apply_anemometer_weather_tab_visibility();
     encoder_delta_apply_button_label();
@@ -460,8 +613,18 @@ extern "C" void rotor_app_config_changed_from_bus(void)
 
 static int wrap_tenths_deg(int t)
 {
-    const int span_t = static_cast<int>(std::lround(
-        static_cast<double>(pwm_config_get_axis_span_deg()) * 10.0));
+    if (axis_is_el()) {
+        const int el_max_t =
+            static_cast<int>(std::lround(static_cast<double>(pwm_config_get_el_max_deg()) * 10.0));
+        if (t < 0) {
+            return 0;
+        }
+        if (t > el_max_t) {
+            return el_max_t;
+        }
+        return t;
+    }
+    const int span_t = static_cast<int>(std::lround(static_cast<double>(axis_span_deg()) * 10.0));
     const int mod = (span_t > 0) ? span_t : 3600;
     t %= mod;
     if (t < 0) {
@@ -496,7 +659,7 @@ static bool parse_taget_text_to_tenths(int *out_tenths)
     int hi = 0;
     bool any_digit = false;
     const int hi_limit = static_cast<int>(std::lround(
-        static_cast<double>(pwm_config_get_axis_span_deg()) * 10.0)) + 100;
+        static_cast<double>(axis_span_deg()) * 10.0)) + 100;
     while (*p >= '0' && *p <= '9') {
         any_digit = true;
         hi = hi * 10 + (*p - '0');
@@ -524,10 +687,21 @@ static bool parse_taget_text_to_tenths(int *out_tenths)
 /** EEZ screens.c: lv_arc_set_rotation(grad_acc, 270) */
 static constexpr int GRAD_ACC_BASE_ROTATION = 270;
 
-/** Arc-Wert 0..360: ganze Grade; bei Span>360 wird zuerst auf 0..360 gefaltet (361→1).
- * ≥359,5° nach Faltung (Homing 360°) → 360 */
+/** Arc-Wert: AZ 0…360; EL 0…el_max (Arc-Wert = Elevation). */
 static int deg_to_arc_value(float deg)
 {
+    if (axis_is_el()) {
+        const int el_max = static_cast<int>(pwm_config_get_el_max_deg() + 0.5f);
+        float d = clamp_el_deg(deg);
+        int v = static_cast<int>(d + 0.5f);
+        if (v < 0) {
+            v = 0;
+        }
+        if (v > el_max) {
+            v = el_max;
+        }
+        return v;
+    }
     float folded = fmodf(deg, 360.0f);
     if (folded < 0.0f) {
         folded += 360.0f;
@@ -576,6 +750,9 @@ static float norm_span_add(float a)
 /** Kompass = Buslage + Versatz der angegebenen Antenne (1…3) — beim Wechsel: Strahl mit alter Antenne. */
 static float bus_to_display_for_idx(float bus_deg_ui, int ant_1_to_3)
 {
+    if (axis_is_el()) {
+        return clamp_el_deg(bus_deg_ui);
+    }
     const float off = pwm_config_get_antoff_deg(ant_1_to_3);
     const float span = pwm_config_get_axis_span_deg();
     /* Eng um 360,0 (±0,05°) halten, NICHT ab 359,5° (das ist die 1°-Arc-Schwelle) — sonst wird jede
@@ -599,6 +776,9 @@ static float bus_to_display(float bus_deg_ui)
 /** Soll am Bus für SETPOSDG aus Anzeige-Winkel und Antenne ant_1_to_3 */
 static float display_to_bus_for_idx(float display_deg, int ant_1_to_3)
 {
+    if (axis_is_el()) {
+        return clamp_el_deg(display_deg);
+    }
     const float off = pwm_config_get_antoff_deg(ant_1_to_3);
     const float span = pwm_config_get_axis_span_deg();
     /* Eng um 360,0 (±0,05°) halten, NICHT ab 359,5° (das ist die 1°-Arc-Schwelle) — sonst wird ein
@@ -621,6 +801,9 @@ static float display_to_bus(float display_deg)
 
 static float min_angle_diff_display(float a_deg, float b_deg)
 {
+    if (axis_is_el()) {
+        return std::fabs(a_deg - b_deg);
+    }
     const float span = pwm_config_get_axis_span_deg();
     if (span > 360.5f) {
         /* Erweiterter Span: lineare Distanz (0 und 360 sind verschiedene Lagen). */
@@ -645,6 +828,9 @@ struct MotionBusResolve {
  * Drehung über die Rückkeule. */
 static MotionBusResolve resolve_motion_bus(float logical_deg, float current_bus, int ant_1_to_3)
 {
+    if (axis_is_el()) {
+        return {clamp_el_deg(logical_deg), false};
+    }
     const float bus_main = display_to_bus_for_idx(logical_deg, ant_1_to_3);
     if (!pwm_config_get_antdp(ant_1_to_3)) {
         return {bus_main, false};
@@ -665,6 +851,9 @@ static MotionBusResolve resolve_motion_bus(float logical_deg, float current_bus,
 /** Mechanisches Ist → logische Anzeige (Kompass / taget / Arc). */
 static float bus_to_logical_display(float bus_mech, int ant_1_to_3)
 {
+    if (axis_is_el()) {
+        return clamp_el_deg(bus_mech);
+    }
     if (!pwm_config_get_antdp(ant_1_to_3)) {
         return bus_to_display_for_idx(bus_mech, ant_1_to_3);
     }
@@ -684,8 +873,21 @@ static float bus_to_logical_display(float bus_mech, int ant_1_to_3)
 
 float rotor_app_get_display_direction_deg(void)
 {
-    return bus_to_logical_display(s_last_bus_ist_deg,
+    if (axis_is_el()) {
+        return clamp_el_deg(s_last_bus_ist_deg);
+    }
+    return bus_to_display_for_idx(s_last_bus_ist_deg,
                                   static_cast<int>(pwm_config_get_last_antenna()));
+}
+
+float rotor_app_get_display_target_deg(void)
+{
+    return s_encoder_target_deg;
+}
+
+extern "C" uint8_t rotor_app_get_axis(void)
+{
+    return static_cast<uint8_t>(s_axis);
 }
 
 static int grad_acc_rotation_from_antoff(int ant_1_to_3)
@@ -703,17 +905,28 @@ static int grad_acc_rotation_from_antoff(int ant_1_to_3)
 /** lv_arc_get_value → Busgrad auf der gedrehten Arc-Skala (ohne Span-Zonenwahl). */
 static float arc_int_value_to_bus_deg(int v)
 {
+    if (axis_is_el()) {
+        const int el_max = static_cast<int>(pwm_config_get_el_max_deg() + 0.5f);
+        if (v < 0) {
+            v = 0;
+        }
+        if (v > el_max) {
+            v = el_max;
+        }
+        return clamp_el_deg(static_cast<float>(v));
+    }
     if (v >= 360) {
         return 360.0f;
     }
     return static_cast<float>(v);
 }
 
-/** Arc-Wert (0..360) → Busgrad; bei Span > 360 die Zone mit kürzerer LINEARER Fahrstrecke.
- * Anschlag am Span-Ende: echte Strecke ist |Ziel−Ist|, kein Wraparound.
- * Beispiel: Ist 340°, Arc auf 40 → Kandidat 40 (300°) vs. 400 (60°) → 400°. */
+/** Arc-Wert → Busgrad; bei Span > 360 die Zone mit kürzerer LINEARER Fahrstrecke. */
 static float arc_value_to_bus_shortest(int v, float current_bus)
 {
+    if (axis_is_el()) {
+        return arc_int_value_to_bus_deg(v);
+    }
     float base = arc_int_value_to_bus_deg(v);
     const float span = pwm_config_get_axis_span_deg();
     if (span <= 360.5f) {
@@ -740,27 +953,393 @@ static float arc_value_to_bus_shortest(int v, float current_bus)
 }
 
 /** Arc: mechanische Lage; bei Dipol-Rückkeule Arc-Wert +180° (logische Strahlrichtung am Zeiger).
- * Knauf-Farbe: Typ 3 → grün in der 1. Umdrehung (≤360°), rot darüber; sonst immer rot. */
+ * Knauf-Farbe: Typ 3 → grün in der 1. Umdrehung (≤360°), rot darüber; sonst immer rot.
+ * EL: EEZ-Arc grad_acc_el (Geometrie/Mode unangetastet). */
 static void grad_acc_sync_bus(float bus_mech_deg, int ant_1_to_3, bool dipole_back_lobe)
 {
-    if (!objects.grad_acc) {
+    lv_obj_t *const arc = active_grad_acc();
+    if (!arc) {
         return;
     }
     float arc_bus = bus_mech_deg;
-    if (pwm_config_get_antdp(ant_1_to_3) && dipole_back_lobe) {
+    if (!axis_is_el() && pwm_config_get_antdp(ant_1_to_3) && dipole_back_lobe) {
         arc_bus = norm_span_add(bus_mech_deg + 180.0f);
     }
+    if (axis_is_el()) {
+        arc_bus = clamp_el_deg(bus_mech_deg);
+    }
     s_arc_updating = true;
-    lv_arc_set_value(objects.grad_acc, deg_to_arc_value(arc_bus));
-    lv_arc_set_rotation(objects.grad_acc, grad_acc_rotation_from_antoff(ant_1_to_3));
+    lv_arc_set_value(arc, deg_to_arc_value(arc_bus));
+    if (!axis_is_el()) {
+        lv_arc_set_rotation(arc, grad_acc_rotation_from_antoff(ant_1_to_3));
+    }
     {
         uint32_t knob = 0xff0000u;
-        if (pwm_config_get_enc_type() == 3u) {
+        if (!axis_is_el() && pwm_config_get_enc_type() == 3u) {
             knob = (bus_mech_deg > 360.0f) ? 0xff0000u : 0x43b302u;
         }
-        lv_obj_set_style_bg_color(objects.grad_acc, lv_color_hex(knob), LV_PART_KNOB);
+        lv_obj_set_style_bg_color(arc, lv_color_hex(knob), LV_PART_KNOB);
     }
     s_arc_updating = false;
+}
+
+/** AZ/EL-Arcs und Zielmarker: nur Sichtbarkeit; EEZ-Geometrie von grad_acc / grad_acc_el bleibt. */
+static void apply_axis_arc_geometry(void)
+{
+    if (objects.grad_acc) {
+        if (axis_is_el()) {
+            lv_obj_add_flag(objects.grad_acc, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_clear_flag(objects.grad_acc, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (objects.grad_acc_el) {
+        if (axis_is_el()) {
+            lv_obj_clear_flag(objects.grad_acc_el, LV_OBJ_FLAG_HIDDEN);
+            /* NORMAL: Knauf folgt 0…el_max (Arc-Wert = Elevation). */
+            const int el_max = static_cast<int>(pwm_config_get_el_max_deg() + 0.5f);
+            lv_arc_set_mode(objects.grad_acc_el, LV_ARC_MODE_NORMAL);
+            lv_arc_set_range(objects.grad_acc_el, 0, el_max);
+            lv_arc_set_bg_start_angle(objects.grad_acc_el, 0);
+            lv_arc_set_bg_end_angle(objects.grad_acc_el, el_max);
+        } else {
+            lv_obj_add_flag(objects.grad_acc_el, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    /* Zielmarker an aktiven Arc anpassen (Größe/Winkel wie EEZ). */
+    lv_obj_t *const arc = active_grad_acc();
+    if (s_arc_target_marker && arc) {
+        lv_obj_set_pos(s_arc_target_marker, lv_obj_get_x(arc) + 5, lv_obj_get_y(arc) + 5);
+        lv_obj_set_size(s_arc_target_marker,
+                        lv_obj_get_width(arc) - 10,
+                        lv_obj_get_height(arc) - 10);
+        lv_arc_set_range(s_arc_target_marker, lv_arc_get_min_value(arc), lv_arc_get_max_value(arc));
+        lv_arc_set_bg_start_angle(s_arc_target_marker, lv_arc_get_bg_angle_start(arc));
+        lv_arc_set_bg_end_angle(s_arc_target_marker, lv_arc_get_bg_angle_end(arc));
+        lv_arc_set_mode(s_arc_target_marker, lv_arc_get_mode(arc));
+        /* Rotation: EL unverändert aus EEZ; AZ = Basis + Antoff */
+        if (axis_is_el()) {
+            lv_arc_set_rotation(s_arc_target_marker, 180); /* wie screens.c grad_acc_el */
+        } else {
+            lv_arc_set_rotation(s_arc_target_marker,
+                                grad_acc_rotation_from_antoff(
+                                    static_cast<int>(pwm_config_get_last_antenna())));
+        }
+        const uint32_t idx = lv_obj_get_index(arc);
+        lv_obj_move_to_index(s_arc_target_marker, idx + 1);
+    }
+    s_arc_target_int_cached = -32768;
+    s_encoder_arc_int_cached = -32768;
+}
+
+static void apply_axis_background(void)
+{
+    if (objects.kompass_bg) {
+        if (axis_is_el()) {
+            lv_obj_add_flag(objects.kompass_bg, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_clear_flag(objects.kompass_bg, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (objects.kompass_el) {
+        if (axis_is_el()) {
+            lv_obj_clear_flag(objects.kompass_el, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(objects.kompass_el, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+static void axis_cache_store_current(void)
+{
+    const unsigned i = static_cast<unsigned>(s_axis);
+    s_axis_cache[i].bus_ist_deg = s_last_bus_ist_deg;
+    s_axis_cache[i].target_deg = s_encoder_target_deg;
+    s_axis_cache[i].tenths = s_encoder_tenths;
+    s_axis_cache[i].dipole_back = s_dipole_back_lobe_active;
+    s_axis_cache[i].referenced = rotor_rs485_is_referenced();
+    s_axis_cache[i].have = true;
+}
+
+static void axis_cache_restore(AxisMode mode)
+{
+    const unsigned i = static_cast<unsigned>(mode);
+    if (!s_axis_cache[i].have) {
+        s_last_bus_ist_deg = 0.0f;
+        s_encoder_target_deg = 0.0f;
+        s_encoder_tenths = 0;
+        s_dipole_back_lobe_active = false;
+        /* Achse noch nie gelesen: bis zum GETREF als nicht referenziert behandeln. */
+        rotor_rs485_seed_referenced(false);
+        return;
+    }
+    s_last_bus_ist_deg = s_axis_cache[i].bus_ist_deg;
+    s_encoder_target_deg = s_axis_cache[i].target_deg;
+    s_encoder_tenths = s_axis_cache[i].tenths;
+    s_dipole_back_lobe_active = s_axis_cache[i].dipole_back;
+    /* Referenz der neuen Achse sofort übernehmen — sonst zeigt der Meldetext bis zum
+     * bestätigenden GETREF „Nicht referenziert“, obwohl die Achse referenziert ist. */
+    rotor_rs485_seed_referenced(s_axis_cache[i].referenced);
+}
+
+static void fmt_de(char *buf, size_t n, float deg);
+static void fmt_taget_from_display_deg(char *buf, size_t n, float deg);
+static void taget_dg_set_display_text(const char *buf, bool sync_full_refr_now = true);
+static void actual_dg_set_display_text(const char *buf, bool sync_full_refr_now = false);
+static void arc_target_marker_refresh(void);
+
+/** UI nach Achsenwechsel: Ist/Soll-Felder, Arc, Homing-LED aus Cache. */
+static void apply_axis_ui_after_switch(void)
+{
+    const int ant = static_cast<int>(pwm_config_get_last_antenna());
+    const unsigned i = static_cast<unsigned>(s_axis);
+    const bool ref = s_axis_cache[i].have ? s_axis_cache[i].referenced
+                                          : rotor_rs485_is_referenced();
+
+    if (objects.homing_led) {
+        const int err_led = rotor_error_app_get_error_code();
+        if ((err_led != 0 && err_led != 10) || !rotor_rs485_is_startup_error_checked()) {
+            lv_led_set_color(objects.homing_led, lv_color_hex(0xff0000));
+        } else {
+            lv_led_set_color(objects.homing_led,
+                             ref ? lv_color_hex(0x43b302) : lv_color_hex(0xff0000));
+        }
+        lv_led_set_brightness(objects.homing_led, 255);
+    }
+    if (objects.grad_acc) {
+        if (ref) {
+            lv_obj_add_flag(objects.grad_acc, LV_OBJ_FLAG_CLICKABLE);
+        } else {
+            lv_obj_clear_flag(objects.grad_acc, LV_OBJ_FLAG_CLICKABLE);
+        }
+    }
+    if (objects.grad_acc_el) {
+        if (ref) {
+            lv_obj_add_flag(objects.grad_acc_el, LV_OBJ_FLAG_CLICKABLE);
+        } else {
+            lv_obj_clear_flag(objects.grad_acc_el, LV_OBJ_FLAG_CLICKABLE);
+        }
+    }
+
+    char buf[16];
+    if (ref) {
+        const float disp = bus_to_logical_display(s_last_bus_ist_deg, ant);
+        fmt_de(buf, sizeof(buf), disp);
+        if (objects.actual_dg) {
+            actual_dg_set_display_text(buf, false);
+        }
+        fmt_taget_from_display_deg(buf, sizeof(buf), s_encoder_target_deg);
+        taget_dg_set_display_text(buf, false);
+        if (active_grad_acc()) {
+            grad_acc_sync_bus(s_last_bus_ist_deg, ant, s_dipole_back_lobe_active);
+        }
+    } else if (objects.actual_dg) {
+        actual_dg_set_display_text("-", false);
+    }
+    arc_target_marker_refresh();
+}
+
+extern "C" void rotor_app_toggle_axis(void)
+{
+    if (rotor_error_app_is_fault_locked()) {
+        return;
+    }
+    const AxisMode next = (s_axis == AxisMode::Az) ? AxisMode::El : AxisMode::Az;
+    const uint8_t next_id = (next == AxisMode::El) ? pwm_config_get_rotor_el_id()
+                                                   : pwm_config_get_rotor_id();
+    /* ID 0 = Achse aus — Umschalten nicht möglich */
+    if (next_id == 0) {
+        return;
+    }
+
+    s_encoder_adjusting = false;
+    s_encoder_goto_retry_pending = false;
+    s_encoder_retry_deadline_ms = 0;
+    s_encoder_idle_deadline_ms = 0;
+    s_arc_dragging = false;
+
+    axis_cache_store_current();
+    s_axis = next;
+    rotor_rs485_set_slave_id(axis_slave_id());
+    axis_cache_restore(s_axis);
+
+    lvgl_port_lock(-1);
+    apply_axis_background();
+    apply_axis_arc_geometry();
+    apply_axis_ui_after_switch();
+    lvgl_port_unlock();
+
+    rotor_rs485_send_getref();
+    /* EL: Typ 2/3 (0…90 vs 0…180) nachziehen — Encoder/Arc hart begrenzen. */
+    if (s_axis == AxisMode::El) {
+        rotor_app_el_limits_changed();
+        rotor_rs485_request_el_rotor_type();
+    }
+}
+
+extern "C" void rotor_app_seed_axis_cache(uint8_t axis, float bus_ist_deg, bool referenced)
+{
+    if (axis > 1u) {
+        return;
+    }
+    const float ist = (axis == 1u) ? clamp_el_deg(bus_ist_deg) : bus_ist_deg;
+    s_axis_cache[axis].bus_ist_deg = ist;
+    if (!s_axis_cache[axis].have) {
+        s_axis_cache[axis].target_deg = ist;
+        s_axis_cache[axis].tenths = deg_to_tenths_rounded(ist);
+        s_axis_cache[axis].dipole_back = false;
+    }
+    s_axis_cache[axis].referenced = referenced;
+    s_axis_cache[axis].have = true;
+}
+
+extern "C" void rotor_app_seed_axis_target_bus(uint8_t axis, float target_bus_deg)
+{
+    if (axis > 1u) {
+        return;
+    }
+    const int ant = static_cast<int>(pwm_config_get_last_antenna());
+    const float disp = (axis == 1u) ? clamp_el_deg(target_bus_deg)
+                                    : bus_to_logical_display(target_bus_deg, ant);
+    s_axis_cache[axis].target_deg = disp;
+    s_axis_cache[axis].tenths = deg_to_tenths_rounded(disp);
+    if (axis == 1u) {
+        s_axis_cache[axis].dipole_back = false;
+    }
+    s_axis_cache[axis].have = true;
+}
+
+extern "C" void rotor_app_seed_axis_referenced(uint8_t axis, bool referenced)
+{
+    if (axis > 1u) {
+        return;
+    }
+    s_axis_cache[axis].referenced = referenced;
+    s_axis_cache[axis].have = true;
+}
+
+extern "C" void rotor_app_el_limits_changed(void)
+{
+    const float el_max = pwm_config_get_el_max_deg();
+    /* EL-Cache immer an neues Limit klemmen (auch wenn gerade AZ aktiv). */
+    if (s_axis_cache[1].have) {
+        if (s_axis_cache[1].bus_ist_deg > el_max) {
+            s_axis_cache[1].bus_ist_deg = el_max;
+        }
+        if (s_axis_cache[1].target_deg > el_max) {
+            s_axis_cache[1].target_deg = el_max;
+        }
+        const int el_max_t = static_cast<int>(std::lround(static_cast<double>(el_max) * 10.0));
+        if (s_axis_cache[1].tenths > el_max_t) {
+            s_axis_cache[1].tenths = el_max_t;
+        }
+    }
+    if (!axis_is_el()) {
+        return;
+    }
+    lvgl_port_lock(-1);
+    apply_axis_arc_geometry();
+    s_last_bus_ist_deg = clamp_el_deg(s_last_bus_ist_deg);
+    s_encoder_target_deg = clamp_el_deg(s_encoder_target_deg);
+    s_encoder_tenths = wrap_tenths_deg(s_encoder_tenths);
+    apply_axis_ui_after_switch();
+    lvgl_port_unlock();
+}
+
+#ifndef ARC_TARGET_SHOW_EPS_DEG
+#define ARC_TARGET_SHOW_EPS_DEG 0.8f
+#endif
+
+static void arc_target_marker_init(void)
+{
+    if (s_arc_target_marker || !objects.grad_acc) {
+        return;
+    }
+    lv_obj_t *const parent = lv_obj_get_parent(objects.grad_acc);
+    if (!parent) {
+        return;
+    }
+    s_arc_target_marker = lv_arc_create(parent);
+    /* 5 px weiter innen: Arc 10 px kleiner und um 5 px eingerückt */
+    lv_obj_set_pos(s_arc_target_marker,
+                   lv_obj_get_x(objects.grad_acc) + 5,
+                   lv_obj_get_y(objects.grad_acc) + 5);
+    lv_obj_set_size(s_arc_target_marker,
+                    lv_obj_get_width(objects.grad_acc) - 10,
+                    lv_obj_get_height(objects.grad_acc) - 10);
+    lv_arc_set_range(s_arc_target_marker, 0, 360);
+    lv_arc_set_bg_start_angle(s_arc_target_marker, 0);
+    lv_arc_set_bg_end_angle(s_arc_target_marker, 360);
+    lv_arc_set_rotation(s_arc_target_marker,
+                        grad_acc_rotation_from_antoff(static_cast<int>(pwm_config_get_last_antenna())));
+    lv_arc_set_value(s_arc_target_marker, 0);
+    /* Nur Knauf sichtbar — Spur/Indikator unsichtbar */
+    lv_obj_set_style_arc_width(s_arc_target_marker, 0, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_arc_target_marker, 0, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_opa(s_arc_target_marker, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(s_arc_target_marker, LV_OPA_TRANSP, LV_PART_INDICATOR);
+    /* Rot (Arc hat blauen Streifen); 3 px größer als zuvor (pad 7 → 10) */
+    lv_obj_set_style_bg_color(s_arc_target_marker, lv_color_hex(0xff0000), LV_PART_KNOB);
+    lv_obj_set_style_bg_opa(s_arc_target_marker, LV_OPA_COVER, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(s_arc_target_marker, 10, LV_PART_KNOB);
+    lv_obj_set_style_radius(s_arc_target_marker, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+    lv_obj_set_style_border_width(s_arc_target_marker, 0, LV_PART_KNOB);
+    lv_obj_clear_flag(s_arc_target_marker, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(s_arc_target_marker, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+    lv_obj_add_flag(s_arc_target_marker, LV_OBJ_FLAG_HIDDEN);
+    /* Über grad_acc, unter Hauptanzeige (Zentrum bleibt bedienbar) */
+    const uint32_t idx = lv_obj_get_index(objects.grad_acc);
+    lv_obj_move_to_index(s_arc_target_marker, idx + 1);
+    s_arc_target_int_cached = -32768;
+    s_arc_target_visible = false;
+}
+
+static void arc_target_marker_refresh(void)
+{
+    lv_obj_t *const arc = active_grad_acc();
+    if (!s_arc_target_marker || !arc) {
+        return;
+    }
+    const int ant = static_cast<int>(pwm_config_get_last_antenna());
+    const float ist_disp = bus_to_logical_display(s_last_bus_ist_deg, ant);
+    const float d = min_angle_diff_display(ist_disp, s_encoder_target_deg);
+    const bool moving = rotor_rs485_is_position_polling() || rotor_rs485_is_remote_setpos_motion();
+    /* Während Arc-Drag ist der rote Knauf selbst das Ziel — Blau erst danach / bei Encoder-Vorwahl. */
+    const bool show = !s_arc_dragging &&
+                      (s_encoder_adjusting || moving || d > ARC_TARGET_SHOW_EPS_DEG);
+
+    if (!show) {
+        if (s_arc_target_visible) {
+            lv_obj_add_flag(s_arc_target_marker, LV_OBJ_FLAG_HIDDEN);
+            s_arc_target_visible = false;
+            s_arc_target_int_cached = -32768;
+        }
+        return;
+    }
+
+    const MotionBusResolve r =
+        resolve_motion_bus(s_encoder_target_deg, s_last_bus_ist_deg, ant);
+    float arc_bus = r.bus_cmd;
+    if (!axis_is_el() && pwm_config_get_antdp(ant) && r.use_back_lobe) {
+        arc_bus = norm_span_add(r.bus_cmd + 180.0f);
+    }
+    if (axis_is_el()) {
+        arc_bus = clamp_el_deg(arc_bus);
+    }
+    const int v = deg_to_arc_value(arc_bus);
+    /* EL: EEZ-Rotation von grad_acc_el belassen (Marker wurde in apply_axis_arc_geometry synct). */
+    if (!axis_is_el()) {
+        const int rot = grad_acc_rotation_from_antoff(ant);
+        lv_arc_set_rotation(s_arc_target_marker, rot);
+    }
+    if (!s_arc_target_visible || v != s_arc_target_int_cached) {
+        lv_arc_set_value(s_arc_target_marker, v);
+        s_arc_target_int_cached = v;
+    }
+    if (!s_arc_target_visible) {
+        lv_obj_clear_flag(s_arc_target_marker, LV_OBJ_FLAG_HIDDEN);
+        s_arc_target_visible = true;
+    }
 }
 
 /**
@@ -788,6 +1367,13 @@ static void fmt_taget_from_wrapped_tenths(char *buf, size_t n, int tenths)
 
 static void fmt_taget_from_display_deg(char *buf, size_t n, float deg)
 {
+    if (axis_is_el()) {
+        const float d = clamp_el_deg(deg);
+        const int t = static_cast<int>(
+            std::floor(static_cast<double>(d) * 10.0 + 1e-4));
+        fmt_taget_from_wrapped_tenths(buf, n, t);
+        return;
+    }
     const float span = pwm_config_get_axis_span_deg();
     /* Bei Span 360: Homing-Endlage 360,0 anzeigen (wrap_tenths_deg würde exakt 360,0 sonst auf 0,0
      * zurückfalten). Schwelle eng um 360,0 (±0,05°) halten — nicht wie beim 1°-Arc (deg_to_arc_value)
@@ -811,7 +1397,7 @@ static void fmt_taget_from_display_deg(char *buf, size_t n, float deg)
  * Encoder: sync_full_refr_now=false — kein synchrones Voll-Rendering; LVGL-Task zeichnet asynchron
  * (sonst blockiert loop() bei schnellem Drehen trotz Bündelung).
  */
-static void taget_dg_set_display_text(const char *buf, bool sync_full_refr_now = true)
+static void taget_dg_set_display_text(const char *buf, bool sync_full_refr_now)
 {
     if (!objects.taget_dg || !buf) {
         return;
@@ -838,7 +1424,7 @@ static void taget_dg_set_display_text(const char *buf, bool sync_full_refr_now =
  * richtig anzeigen, bis die Textarea intern wieder mit altem Puffer synchronisiert (Sprung zurück).
  * Zusätzlich Label + invalidate wie bei taget (0,1°-Redraw).
  */
-static void actual_dg_set_display_text(const char *buf, bool sync_full_refr_now = false)
+static void actual_dg_set_display_text(const char *buf, bool sync_full_refr_now)
 {
     if (!objects.actual_dg || !buf) {
         return;
@@ -880,6 +1466,13 @@ static void on_ref_status(bool referenced)
             lv_obj_add_flag(objects.grad_acc, LV_OBJ_FLAG_CLICKABLE);
         } else {
             lv_obj_clear_flag(objects.grad_acc, LV_OBJ_FLAG_CLICKABLE);
+        }
+    }
+    if (objects.grad_acc_el) {
+        if (referenced) {
+            lv_obj_add_flag(objects.grad_acc_el, LV_OBJ_FLAG_CLICKABLE);
+        } else {
+            lv_obj_clear_flag(objects.grad_acc_el, LV_OBJ_FLAG_CLICKABLE);
         }
     }
     if (objects.homing_led) {
@@ -996,6 +1589,7 @@ static void on_target_deg(float bus_deg)
     fmt_taget_from_display_deg(buf, sizeof(buf), disp);
     /* Kein lv_refr_now: bei Bus-Flut blockiert synchrones Rendering die RS485-Zeilenverarbeitung. */
     taget_dg_set_display_text(buf, false);
+    arc_target_marker_refresh();
     lvgl_port_unlock();
 }
 
@@ -1022,9 +1616,10 @@ static void on_position_deg(float bus_deg_ui)
     /* Während Positionsfahrt: Arc aus Ist — auch wenn Encoder-Flag noch gesetzt ist. */
     if (!s_arc_dragging &&
         (!s_encoder_adjusting || rotor_rs485_is_position_polling()) &&
-        objects.grad_acc) {
+        active_grad_acc()) {
         grad_acc_sync_bus(bus_deg_ui, ant, s_dipole_back_lobe_active);
     }
+    arc_target_marker_refresh();
     lvgl_port_unlock();
 }
 
@@ -1063,8 +1658,10 @@ static void on_arc(lv_event_t *e)
         s_arc_dragging = true;
         s_arc_moved_this_press = false;
         s_arc_value_at_press = lv_arc_get_value(arc);
+        s_arc_drag_bus_ref_deg = s_last_bus_ist_deg;
         s_arc_drag_cc_next_ms = 0;
         s_arc_drag_cc_have_deg = false;
+        arc_target_marker_refresh(); /* Blau aus — roter Knauf ist während Drag das Ziel */
         /* Encoder-Session hier NICHT abbrechen: kurzer Touch ohne Drehen soll keine Klicks „verschlucken“
          * und kein ausstehendes SETPOSDG verwerfen — erst bei echtem Drag (VALUE_CHANGED). */
     }
@@ -1093,22 +1690,28 @@ static void on_arc(lv_event_t *e)
         const int v = lv_arc_get_value(arc);
         const int ant = static_cast<int>(pwm_config_get_last_antenna());
         const float disp = bus_to_display_for_idx(
-            arc_value_to_bus_shortest(v, s_last_bus_ist_deg), ant);
+            arc_value_to_bus_shortest(v, s_arc_drag_bus_ref_deg), ant);
+        s_encoder_target_deg = disp;
         char buf[16];
         fmt_taget_from_display_deg(buf, sizeof(buf), disp);
-        taget_dg_set_display_text(buf);
+        /* Kein lv_refr_now — sonst flackert der NeoPixel-Ring bei jedem Grad. */
+        taget_dg_set_display_text(buf, false);
         arc_drag_send_setposcc(disp, ant);
     }
     if (c == LV_EVENT_RELEASED) {
         s_arc_dragging = false;
         s_arc_drag_cc_have_deg = false;
+        /* Nach langer SETPOSCC-Vorschau: Watchdog neu armieren (kein Slave-ACK während Drag). */
+        rotor_rs485_arm_conn_watchdog();
         /* Pieps immer beim Loslassen (Arc-Callback nur bei Touch auf dem Arc) — nicht hinter
          * s_arc_updating verstecken: sonst kein Ton und kein GOTO, wenn zufällig Flag noch stand. */
         touch_feedback_arc_release();
         if (!rotor_rs485_is_referenced()) {
+            arc_target_marker_refresh();
             return;
         }
         if (rotor_error_app_is_fault_locked()) {
+            arc_target_marker_refresh();
             return;
         }
         const int target_v = lv_arc_get_value(arc);
@@ -1116,18 +1719,20 @@ static void on_arc(lv_event_t *e)
         const bool moved = s_arc_moved_this_press || (target_v != s_arc_value_at_press);
         /* Nur nach echtem Drehen: GOTO — sonst (Finger kurz auf Arc) Encoder/Bus nicht mit Arc-Wert überschreiben. */
         if (!moved) {
+            arc_target_marker_refresh();
             return;
         }
         const int ant = static_cast<int>(pwm_config_get_last_antenna());
         const float logical_tgt =
-            bus_to_display_for_idx(arc_value_to_bus_shortest(target_v, s_last_bus_ist_deg), ant);
+            bus_to_display_for_idx(arc_value_to_bus_shortest(target_v, s_arc_drag_bus_ref_deg), ant);
         char buf[16];
         fmt_taget_from_display_deg(buf, sizeof(buf), logical_tgt);
-        taget_dg_set_display_text(buf);
+        taget_dg_set_display_text(buf, false);
         s_encoder_target_deg = logical_tgt;
-        if (objects.grad_acc) {
+        if (active_grad_acc()) {
             grad_acc_sync_bus(s_last_bus_ist_deg, ant, s_dipole_back_lobe_active);
         }
+        arc_target_marker_refresh();
         const MotionBusResolve r = resolve_motion_bus(
             logical_tgt, s_last_bus_ist_deg, ant);
         s_dipole_back_lobe_active = r.use_back_lobe;
@@ -1135,10 +1740,20 @@ static void on_arc(lv_event_t *e)
     }
 }
 
+static void on_ref_btn(lv_event_t *e)
+{
+    /* Objekt „ref“ / Label „Homing“ in EEZ: Laufzeit = Encoder 0,1° ↔ 1° (wie früher encoder_delta). */
+    on_encoder_delta_btn(e);
+}
+
 extern "C" void rotor_app_init(void)
 {
+    /* Nur EL konfiguriert (AZ=0): auf Elevation starten. */
+    if (pwm_config_get_rotor_id() == 0u && pwm_config_get_rotor_el_id() != 0u) {
+        s_axis = AxisMode::El;
+    }
     rotor_rs485_set_master_id(pwm_config_get_master_id());
-    rotor_rs485_set_slave_id(pwm_config_get_rotor_id());
+    rotor_rs485_set_slave_id(axis_slave_id());
     rotor_rs485_set_ref_callback(on_ref_status);
     rotor_rs485_set_position_callback(on_position_deg);
     rotor_rs485_set_target_callback(on_target_deg);
@@ -1156,6 +1771,26 @@ extern "C" void rotor_app_init(void)
             lv_obj_clear_flag(objects.grad_acc, LV_OBJ_FLAG_CLICKABLE);
         }
     }
+    if (objects.grad_acc_el) {
+        lv_obj_add_event_cb(objects.grad_acc_el, on_arc, LV_EVENT_ALL, nullptr);
+        lv_obj_set_style_bg_color(objects.grad_acc_el, lv_color_hex(0xff0000), LV_PART_KNOB);
+        lv_obj_set_style_bg_opa(objects.grad_acc_el, LV_OPA_COVER, LV_PART_KNOB);
+        if (!rotor_rs485_is_referenced()) {
+            lv_obj_clear_flag(objects.grad_acc_el, LV_OBJ_FLAG_CLICKABLE);
+        }
+        /* EEZ startet oft sichtbar — bis zum ersten Toggle ausblenden */
+        lv_obj_add_flag(objects.grad_acc_el, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (objects.grad_acc || objects.grad_acc_el) {
+        /* Soll-Punkt (zweiter Arc) — Laufzeit, ohne src/ui */
+        arc_target_marker_init();
+    }
+    /* AZ-Start: EL-Hintergrund/EL-Arc verstecken; bei AZ=0 bereits s_axis=EL */
+    apply_axis_background();
+    apply_axis_arc_geometry();
+    if (axis_is_el()) {
+        apply_axis_ui_after_switch();
+    }
     s_pwm_ui_is_fast = pwm_config_get_pwm_ui_fast() != 0;
     pwm_style_slow_fast(s_pwm_ui_is_fast);
     if (objects.slow) {
@@ -1164,8 +1799,8 @@ extern "C" void rotor_app_init(void)
     if (objects.fast) {
         lv_obj_add_event_cb(objects.fast, on_fast_btn, LV_EVENT_CLICKED, nullptr);
     }
-    if (objects.encoder_delta_bu) {
-        lv_obj_add_event_cb(objects.encoder_delta_bu, on_encoder_delta_btn, LV_EVENT_CLICKED, nullptr);
+    if (objects.ref) {
+        lv_obj_add_event_cb(objects.ref, on_ref_btn, LV_EVENT_CLICKED, nullptr);
     }
     encoder_delta_apply_button_label();
     antenna_apply_labels_from_config();
@@ -1190,8 +1825,11 @@ extern "C" void rotor_app_init(void)
         lv_obj_set_style_transform_pivot_y(objects.pfeil_wind, lv_pct(50), 0);
         lv_obj_set_style_transform_angle(objects.pfeil_wind, s_pfeil_wind_eez_base_angle01, 0);
     }
-    if (objects.rotor_id) {
-        lv_obj_add_event_cb(objects.rotor_id, on_id_field_event, LV_EVENT_ALL, nullptr);
+    if (objects.rotor_az) {
+        lv_obj_add_event_cb(objects.rotor_az, on_id_field_event, LV_EVENT_ALL, nullptr);
+    }
+    if (objects.rotor_el) {
+        lv_obj_add_event_cb(objects.rotor_el, on_id_field_event, LV_EVENT_ALL, nullptr);
     }
     if (objects.controller_id) {
         lv_obj_add_event_cb(objects.controller_id, on_id_field_event, LV_EVENT_ALL, nullptr);
@@ -1207,17 +1845,20 @@ static bool encoder_apply_goto(float target_deg)
     if (!rotor_rs485_is_referenced()) {
         return false;
     }
+    if (axis_is_el()) {
+        target_deg = clamp_el_deg(target_deg);
+    }
     const int ant = static_cast<int>(pwm_config_get_last_antenna());
     const MotionBusResolve r = resolve_motion_bus(
         target_deg, s_last_bus_ist_deg, ant);
     lvgl_port_lock(-1);
-    /* Während laufender Positionsfahrt: Arc nicht auf neues Ziel springen — on_position_deg führt nach Ist.
-     * Sonst zuckt der Arc kurz zum neuen Encoder-Ziel und wird beim nächsten GETPOSDG-ACK zurückgerissen. */
-    if (ENCODER_MOVES_ARC && objects.grad_acc && !rotor_rs485_is_position_polling()) {
-        grad_acc_sync_bus(r.bus_cmd, ant, r.use_back_lobe);
+    /* Rot bleibt auf Ist; blauer Marker zeigt Encoder-Soll (Vorwahl). */
+    if (ENCODER_MOVES_ARC && active_grad_acc() && !rotor_rs485_is_position_polling()) {
+        grad_acc_sync_bus(s_last_bus_ist_deg, ant, s_dipole_back_lobe_active);
     }
-    lvgl_port_unlock();
     s_dipole_back_lobe_active = r.use_back_lobe;
+    arc_target_marker_refresh();
+    lvgl_port_unlock();
     return rotor_rs485_goto_degrees(r.bus_cmd);
 }
 
@@ -1234,20 +1875,26 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
     if (s_id_field_focus != IdFieldFocus::None) {
         const int sign = (delta_tenths > 0) ? 1 : -1;
         lvgl_port_lock(-1);
-        lv_obj_t *const ta =
-            (s_id_field_focus == IdFieldFocus::RotorId) ? objects.rotor_id : objects.controller_id;
+        lv_obj_t *ta = objects.controller_id;
+        uint8_t kind = 2;
+        if (s_id_field_focus == IdFieldFocus::RotorAz) {
+            ta = objects.rotor_az;
+            kind = 0;
+        } else if (s_id_field_focus == IdFieldFocus::RotorEl) {
+            ta = objects.rotor_el;
+            kind = 1;
+        }
         if (ta) {
-            const bool is_rotor = (s_id_field_focus == IdFieldFocus::RotorId);
-            const uint8_t v = id_field_display_or_saved_config(ta, is_rotor);
+            const uint8_t v = id_field_display_or_saved_config(ta, kind);
+            const int min_id = (kind == 1) ? 0 : 1;
             int nv = static_cast<int>(v) + sign;
-            if (nv < 1) {
-                nv = 1;
+            if (nv < min_id) {
+                nv = min_id;
             }
             if (nv > 254) {
                 nv = 254;
             }
-            const uint8_t newv = static_cast<uint8_t>(nv);
-            id_fields_set_text(ta, newv);
+            id_fields_set_text(ta, static_cast<uint8_t>(nv));
         }
         lvgl_port_unlock();
         return;
@@ -1280,29 +1927,20 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
 
     const float deg = static_cast<float>(s_encoder_tenths) / 10.0f;
     const int ant = static_cast<int>(pwm_config_get_last_antenna());
-    /* Während Positionsfahrt: Arc bleibt auf Ist-Position (on_position_deg führt nach).
-     * Encoder-Eingriff während Fahrt würde Arc zum neuen Soll springen lassen,
-     * beim nächsten GETPOSDG-ACK sofort zurückfallen → Flackern.
-     * Bei stehendem Rotor: Arc folgt dem Encoder-Soll wie bisher. */
-    if (ENCODER_MOVES_ARC && objects.grad_acc && !rotor_rs485_is_position_polling()) {
-        const MotionBusResolve r = resolve_motion_bus(deg, s_last_bus_ist_deg, ant);
-        const int arc_int = deg_to_arc_value(
-            pwm_config_get_antdp(ant) && r.use_back_lobe
-                ? norm_span_add(r.bus_cmd + 180.0f)
-                : r.bus_cmd);
-        if (arc_int != s_encoder_arc_int_cached) {
-            grad_acc_sync_bus(r.bus_cmd, ant, r.use_back_lobe);
-            s_encoder_arc_int_cached = arc_int;
-        }
+    /* Während Positionsfahrt: Arc (rot) bleibt auf Ist (on_position_deg).
+     * Encoder-Vorwahl: Rot bleibt auf Ist, blauer Marker folgt dem Soll. */
+    if (ENCODER_MOVES_ARC && active_grad_acc() && !rotor_rs485_is_position_polling()) {
+        grad_acc_sync_bus(s_last_bus_ist_deg, ant, s_dipole_back_lobe_active);
+        s_encoder_arc_int_cached = deg_to_arc_value(s_last_bus_ist_deg);
     }
 
     char buf[16];
     fmt_taget_from_wrapped_tenths(buf, sizeof(buf), s_encoder_tenths);
     taget_dg_set_display_text(buf, false);
+    s_encoder_target_deg = deg;
+    arc_target_marker_refresh();
 
     lvgl_port_unlock();
-
-    s_encoder_target_deg = deg;
 
     /* PC/Bus: bei jedem neuen taget vor dem verzögerten SETPOSDG (gleiche Buslage wie späteres SETPOSDG) */
     rotor_rs485_send_setposcc_degrees(display_to_bus(deg));
@@ -1320,6 +1958,11 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
 extern "C" bool rotor_app_encoder_id_field_focused(void)
 {
     return s_id_field_focus != IdFieldFocus::None;
+}
+
+extern "C" bool rotor_app_is_ui_preview_active(void)
+{
+    return s_arc_dragging || s_encoder_adjusting;
 }
 
 /**
@@ -1341,12 +1984,13 @@ extern "C" void rotor_app_antenna_offset_changed(void)
 }
 
 /**
- * Nach pwm_config_set_last_antenna(neu): gleiche Kompassrichtung (Strahl) wie mit prev_antenna
- * zur aktuellen Buslage — SETPOSDG mit umgerechneter Mechanik (nur wenn send_bus_goto).
- * Mitläufer-Modus: send_bus_goto false — nur taget/Arc/Offset, kein eigenes SETPOSDG (vom PC kommt SETPOSDG).
+ * Nach pwm_config_set_last_antenna(neu): Ist und Soll auf die neue Antennen-Anzeige gleichziehen
+ * (gleicher Buswinkel + neuer Versatz) — kein SETPOS nur wegen des Wechsels.
+ * send_bus_goto: ungenutzt (API/Mitläufer); Strahl-Erhalt war früher concha=1.
  */
 static void rotor_app_antenna_switch_from_ui(uint8_t prev_antenna_1_to_3, bool send_bus_goto)
 {
+    (void)send_bus_goto;
     s_encoder_adjusting = false;
     s_encoder_goto_retry_pending = false;
     s_encoder_retry_deadline_ms = 0;
@@ -1357,61 +2001,30 @@ static void rotor_app_antenna_switch_from_ui(uint8_t prev_antenna_1_to_3, bool s
         return;
     }
 
-    /* concha 0: Soll = Ist in Anzeige für die neue Antenne (kein Strahl beibehalten). */
-    const float beam_compass = bus_to_logical_display(
-        s_last_bus_ist_deg, static_cast<int>(prev_antenna_1_to_3));
-    const float disp_ist_new_ant =
-        bus_to_display_for_idx(s_last_bus_ist_deg, static_cast<int>(now_ant));
-    const uint8_t concha = pwm_config_get_concha();
-    const float soll_display = (concha == 0) ? disp_ist_new_ant : beam_compass;
-
+    /* Soll = Ist unter neuer Antenne (Versatz) — Anzeige bleibt konsistent, Rotor steht. */
+    const float soll_display =
+        bus_to_logical_display(s_last_bus_ist_deg, static_cast<int>(now_ant));
     s_encoder_target_deg = soll_display;
     s_encoder_tenths = deg_to_tenths_rounded(soll_display);
+    s_taget_ignore_bus_target_until_ms = 0;
 
     on_position_deg(s_last_bus_ist_deg);
 
-    if (rotor_error_app_is_fault_locked()) {
+    if (!rotor_rs485_is_referenced() || !objects.taget_dg) {
         return;
     }
-    if (!rotor_rs485_is_referenced()) {
-        return;
-    }
-    if (!objects.taget_dg) {
-        return;
-    }
-
-    if (concha == 0) {
-        s_taget_ignore_bus_target_until_ms = 0;
-        lvgl_port_lock(-1);
-        char buf[16];
-        fmt_taget_from_display_deg(buf, sizeof(buf), soll_display);
-        taget_dg_set_display_text(buf);
-        lvgl_port_unlock();
-        return;
-    }
-
-    s_taget_ignore_bus_target_until_ms = millis() + 2000;
 
     lvgl_port_lock(-1);
     char buf[16];
-    fmt_taget_from_wrapped_tenths(buf, sizeof(buf), s_encoder_tenths);
+    fmt_taget_from_display_deg(buf, sizeof(buf), soll_display);
     taget_dg_set_display_text(buf);
+    arc_target_marker_refresh();
     lvgl_port_unlock();
-
-    if (!send_bus_goto) {
-        return;
-    }
-    if (!encoder_apply_goto(beam_compass)) {
-        const MotionBusResolve r = resolve_motion_bus(
-            beam_compass, s_last_bus_ist_deg, static_cast<int>(now_ant));
-        s_dipole_back_lobe_active = r.use_back_lobe;
-        rotor_rs485_hw_snap_retarget_request(r.bus_cmd);
-    }
 }
 
 /**
- * Außentemp (ACK_GETTEMPA): immer Tab Rotor_Info (aussen_temperatur); Wetter-Tab (temperature) nur bei anemometer=1.
- * Wind nur bei anemometer=1; Motortemp (Bit 0x8) immer.
+ * Außentemp (ACK_GETTEMPA): Wetter-Tab (temperature); Motortemp immer.
+ * Wind nur bei anemometer=1.
  */
 extern "C" void rotor_app_weather_ui_poll(void)
 {
@@ -1439,10 +2052,7 @@ extern "C" void rotor_app_weather_ui_poll(void)
     }
     if (m & 2u) {
         fmt_de(buf, sizeof(buf), t);
-        if (objects.aussen_temperatur) {
-            lv_textarea_set_text(objects.aussen_temperatur, buf);
-        }
-        if (ano && objects.temperature) {
+        if (objects.temperature) {
             lv_textarea_set_text(objects.temperature, buf);
         }
     }
@@ -1521,6 +2131,7 @@ extern "C" void rotor_app_loop(void)
         }
         s_encoder_goto_retry_pending = false;
         s_encoder_adjusting = false;
+        rotor_rs485_arm_conn_watchdog();
         s_encoder_retry_deadline_ms = 0;
         s_encoder_idle_deadline_ms = 0;
         return;
@@ -1540,6 +2151,7 @@ extern "C" void rotor_app_loop(void)
         return;
     }
     s_encoder_adjusting = false;
+    rotor_rs485_arm_conn_watchdog();
     s_encoder_retry_deadline_ms = 0;
 }
 
@@ -1557,11 +2169,13 @@ extern "C" void rotor_app_snap_target_to_deg(float bus_deg)
     lvgl_port_lock(-1);
     char buf[16];
     fmt_taget_from_display_deg(buf, sizeof(buf), disp);
-    taget_dg_set_display_text(buf);
-    if (ENCODER_MOVES_ARC && objects.grad_acc) {
+    taget_dg_set_display_text(buf, false);
+    if (ENCODER_MOVES_ARC && active_grad_acc()) {
         const MotionBusResolve r = resolve_motion_bus(disp, s_last_bus_ist_deg, ant);
         s_dipole_back_lobe_active = r.use_back_lobe;
-        grad_acc_sync_bus(r.bus_cmd, ant, r.use_back_lobe);
+        /* Rot = Ist; Blau = Soll */
+        grad_acc_sync_bus(s_last_bus_ist_deg, ant, s_dipole_back_lobe_active);
     }
+    arc_target_marker_refresh();
     lvgl_port_unlock();
 }

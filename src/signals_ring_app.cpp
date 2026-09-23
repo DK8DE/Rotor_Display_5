@@ -102,13 +102,28 @@ static float normalize_deg_for_led(float deg)
     return x;
 }
 
-/** Richtung als kontinuierliche LED-Position 0..n (für weichen Übergang zwischen benachbarten LEDs) */
+/** Richtung als kontinuierliche LED-Position 0..n (für weichen Übergang zwischen benachbarten LEDs).
+ * AZ: voller Kreis 0…360. EL: 0…180 → LED-Sektor 270°…90° (Uhrzeigersinn). */
 static float deg_to_led_position(float deg_ui)
 {
     if (s_n == 0) {
         return 0.0f;
     }
-    const float x = normalize_deg_for_led(deg_ui);
+    float mapped = deg_ui;
+    if (rotor_app_get_axis() == 1u) {
+        float el = deg_ui;
+        if (el < 0.0f) {
+            el = 0.0f;
+        } else if (el > 180.0f) {
+            el = 180.0f;
+        }
+        /* 0°EL → 270° Ring, 180°EL → 90° Ring (CW) */
+        mapped = 270.0f + el;
+        if (mapped >= 360.0f) {
+            mapped -= 360.0f;
+        }
+    }
+    const float x = normalize_deg_for_led(mapped);
     return (x / 360.0f) * (float)s_n;
 }
 
@@ -285,13 +300,19 @@ void signals_ring_app_loop(uint32_t now_ms)
             }
         }
     } else if (ref) {
-        const uint8_t ant = pwm_config_get_last_antenna();
-        const float opening = pwm_config_get_opening_deg((int)ant);
-        const bool dipole = pwm_config_get_antdp((int)ant) != 0;
-        if (opening >= 20.0f) {
-            set_direction_sector_red_on_green(pos_deg, opening, dipole);
+        const uint8_t axis = rotor_app_get_axis();
+        if (axis == 1u) {
+            /* EL: kein Antennen-Öffnungswinkel / keine Dipol-Keule — nur Richtungspunkt. */
+            set_direction_red_on_green(dir_led_pos, false);
         } else {
-            set_direction_red_on_green(dir_led_pos, dipole);
+            const uint8_t ant = pwm_config_get_last_antenna();
+            const float opening = pwm_config_get_opening_deg((int)ant);
+            const bool dipole = pwm_config_get_antdp((int)ant) != 0;
+            if (opening >= 20.0f) {
+                set_direction_sector_red_on_green(pos_deg, opening, dipole);
+            } else {
+                set_direction_red_on_green(dir_led_pos, dipole);
+            }
         }
     } else {
         for (uint8_t i = 0; i < s_n; i++) {

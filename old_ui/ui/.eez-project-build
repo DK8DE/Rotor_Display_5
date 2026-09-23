@@ -12,7 +12,6 @@
     "ui.c",
     "ui.h",
     "ui_image_kompass_bg.bin",
-    "ui_image_kompass_el.bin",
     "ui_image_pfeil_wind.bin",
     "vars.h"
   ]
