@@ -294,8 +294,10 @@ Schreibbefehle speichern in `config.json` (Slow/Fast‑PWM, IDs, Antennen‑Labe
 | Befehl | Antwort |
 | --- | --- |
 | `GETCOVERSION` | `ACK_GETCOVERSION` / `NAK_GETCOVERSION` — Firmware‑Version des Display‑Controllers (`FIRMWARE_APP_VERSION`, z. B. `1.3.0`), für eine stabile CS mit `;0` angehängt (analog `GETCONANTNAME*`). |
-| `GETCONRID` / `GETTCONRID` (Alias) | `ACK_GETCONRID` (Parameter = aktuelle `rotor_id`) |
-| `SETCONRID` | `ACK_SETCONRID` / `NAK_SETCONRID` (Rotor‑Slave‑ID 1…254) |
+| `GETCONTAZID` | `ACK_GETCONTAZID` (Parameter = aktuelle `rotor_id` / AZ‑Slave‑ID, **0…254**; `0` = Achse aus). Beispiel: `#1:2:GETCONTAZID:0:3$` → `#2:1:ACK_GETCONTAZID:20:…$`. |
+| `SETCONTAZID` | `ACK_SETCONTAZID` / `NAK_SETCONTAZID` — AZ‑Rotor‑Slave‑ID **0…254** setzen und speichern (`0` = Achse aus). Sofort übernommen (aktive Achse ggf. auf EL). Beispiel: `#1:2:SETCONTAZID:22:25$` (`CS = 1 + 2 + 22`). |
+| `GETCONTELID` | `ACK_GETCONTELID` (Parameter = aktuelle `rotor_el_id` / EL‑Slave‑ID, **0…254**; `0` = Achse aus). |
+| `SETCONTELID` | `ACK_SETCONTELID` / `NAK_SETCONTELID` — EL‑Rotor‑Slave‑ID **0…254** setzen und speichern (`0` = Achse aus). Sofort übernommen (aktive Achse ggf. auf AZ). Beispiel: `#1:2:SETCONTELID:21:24$` (`CS = 1 + 2 + 21`). |
 | `GETCONTID` | `ACK_GETCONTID` (Parameter = `master_id` des Controllers) |
 | `SETCONTID` | `ACK_SETCONTID` / `NAK_SETCONTID` (1…254) — Ziel `DST = master_id` (unicast). |
 | `SETCONIDF` oder `SETCONTID` mit `DST = 255` (Broadcast) | `ACK_SETCONIDF` bzw. `ACK_SETCONTID` / `NAK_SETCONTID` — setzt die **neue** Controller‑`master_id` in `config.json`, wenn die bisherige ID unbekannt ist. Checksumme: `CS = SRC + 255 + <neue ID>` (z. B. `#1:255:SETCONIDF:5:261$` mit `1+255+5=261`). |

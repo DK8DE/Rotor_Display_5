@@ -142,6 +142,49 @@ void pwm_config_load_defaults(void)
     s_led_ring_brightness_pct = 100;
 }
 
+static char s_last_written[896];
+static bool s_last_written_valid = false;
+
+static size_t render_config_json(char *out, size_t sz)
+{
+    if (!out || sz < 4) {
+        return 0;
+    }
+    char e1[96], e2[96], e3[96];
+    escape_json_string(s_ant_label[0], e1, sizeof(e1));
+    escape_json_string(s_ant_label[1], e2, sizeof(e2));
+    escape_json_string(s_ant_label[2], e3, sizeof(e3));
+    const int n = snprintf(out, sz,
+             "{\n"
+             "  \"slow_pwm\": %u,\n"
+             "  \"fast_pwm\": %u,\n"
+             "  \"pwm_fast\": %u,\n"
+             "  \"master_id\": %u,\n"
+             "  \"rotor_id\": %u,\n"
+             "  \"rotor_el_id\": %u,\n"
+             "  \"antenna_1_label\": \"%s\",\n"
+             "  \"antenna_2_label\": \"%s\",\n"
+             "  \"antenna_3_label\": \"%s\",\n"
+             "  \"last_antenna\": %u,\n"
+             "  \"confrq\": %u,\n"
+             "  \"lsl\": %u,\n"
+             "  \"anemometer\": %u,\n"
+             "  \"encoder_delta\": %u,\n"
+             "  \"concha\": %u,\n"
+             "  \"conledp\": %u\n"
+             "}\n",
+             (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_pwm_ui_fast, (unsigned)s_master_id,
+             (unsigned)s_rotor_id, (unsigned)s_rotor_el_id, e1, e2, e3,
+             (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol,
+             (unsigned)s_anemometer, (unsigned)s_encoder_delta_tenths, (unsigned)s_concha,
+             (unsigned)s_led_ring_brightness_pct);
+    if (n < 0 || (size_t)n >= sz) {
+        out[0] = '\0';
+        return 0;
+    }
+    return (size_t)n;
+}
+
 void pwm_config_load(void)
 {
     pwm_config_load_defaults();
@@ -207,45 +250,30 @@ void pwm_config_load(void)
     if (ledb >= 0 && ledb <= 100) {
         s_led_ring_brightness_pct = (uint8_t)ledb;
     }
+    /* Nach Load: Snapshot für Schreibunterdrückung (kein unnötiger Rewrite beim ersten Save). */
+    if (render_config_json(s_last_written, sizeof(s_last_written)) > 0) {
+        s_last_written_valid = true;
+    }
 }
 
 void pwm_config_save(void)
 {
+    char line[896];
+    if (render_config_json(line, sizeof(line)) == 0) {
+        return;
+    }
+    if (s_last_written_valid && strcmp(line, s_last_written) == 0) {
+        return;
+    }
     File f = FFat.open("/config.json", "w");
     if (!f) {
         return;
     }
-    char e1[96], e2[96], e3[96];
-    escape_json_string(s_ant_label[0], e1, sizeof(e1));
-    escape_json_string(s_ant_label[1], e2, sizeof(e2));
-    escape_json_string(s_ant_label[2], e3, sizeof(e3));
-    char line[896];
-    snprintf(line, sizeof(line),
-             "{\n"
-             "  \"slow_pwm\": %u,\n"
-             "  \"fast_pwm\": %u,\n"
-             "  \"pwm_fast\": %u,\n"
-             "  \"master_id\": %u,\n"
-             "  \"rotor_id\": %u,\n"
-             "  \"rotor_el_id\": %u,\n"
-             "  \"antenna_1_label\": \"%s\",\n"
-             "  \"antenna_2_label\": \"%s\",\n"
-             "  \"antenna_3_label\": \"%s\",\n"
-             "  \"last_antenna\": %u,\n"
-             "  \"confrq\": %u,\n"
-             "  \"lsl\": %u,\n"
-             "  \"anemometer\": %u,\n"
-             "  \"encoder_delta\": %u,\n"
-             "  \"concha\": %u,\n"
-             "  \"conledp\": %u\n"
-             "}\n",
-             (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_pwm_ui_fast, (unsigned)s_master_id,
-             (unsigned)s_rotor_id, (unsigned)s_rotor_el_id, e1, e2, e3,
-             (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol,
-             (unsigned)s_anemometer, (unsigned)s_encoder_delta_tenths, (unsigned)s_concha,
-             (unsigned)s_led_ring_brightness_pct);
     f.print(line);
     f.close();
+    strncpy(s_last_written, line, sizeof(s_last_written) - 1);
+    s_last_written[sizeof(s_last_written) - 1] = '\0';
+    s_last_written_valid = true;
 }
 
 uint8_t pwm_config_get_slow(void)

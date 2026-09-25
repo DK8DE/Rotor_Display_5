@@ -424,6 +424,43 @@ static bool s_pending_force_axis_az_ui = false;
 static bool s_pending_force_axis_el_ui = false;
 
 /**
+ * Aktive Achse hat ID 0 und die andere ist ungleich 0 → auf die andere Achse wechseln.
+ * Sonst Slave-ID der aktiven Achse (falls ungleich 0) übernehmen.
+ * @return true wenn Achse gewechselt wurde.
+ */
+static bool apply_axis_fallback_for_zero_id(void)
+{
+    if (!axis_is_el()) {
+        const uint8_t az = pwm_config_get_rotor_id();
+        const uint8_t el = pwm_config_get_rotor_el_id();
+        if (az == 0u && el != 0u) {
+            axis_cache_store_current();
+            s_axis = AxisMode::El;
+            rotor_rs485_set_slave_id(el);
+            axis_cache_restore(AxisMode::El);
+            return true;
+        }
+        if (az != 0u) {
+            rotor_rs485_set_slave_id(az);
+        }
+        return false;
+    }
+    const uint8_t el = pwm_config_get_rotor_el_id();
+    const uint8_t az = pwm_config_get_rotor_id();
+    if (el == 0u && az != 0u) {
+        axis_cache_store_current();
+        s_axis = AxisMode::Az;
+        rotor_rs485_set_slave_id(az);
+        axis_cache_restore(AxisMode::Az);
+        return true;
+    }
+    if (el != 0u) {
+        rotor_rs485_set_slave_id(el);
+    }
+    return false;
+}
+
+/**
  * Nur beim HW-Taster: gültige Zahl → bei Abweichung von der Config RS485 + pwm_config_save();
  * gleicher Wert → nur Text normalisieren, kein Flash-Schreiben.
  * kind: 0=AZ (0 = Achse aus), 1=EL (0 = Achse aus), 2=Master
@@ -449,32 +486,20 @@ static bool id_field_try_commit_text(lv_obj_t *ta, uint8_t kind)
     if (nv != cur) {
         if (kind == 0) {
             pwm_config_set_rotor_id(nv);
-            if (nv == 0u) {
-                const uint8_t el = pwm_config_get_rotor_el_id();
-                if (el != 0u && !axis_is_el()) {
-                    axis_cache_store_current();
-                    s_axis = AxisMode::El;
-                    rotor_rs485_set_slave_id(el);
-                    axis_cache_restore(AxisMode::El);
-                    s_pending_force_axis_el_ui = true;
-                }
-            } else if (!axis_is_el()) {
-                rotor_rs485_set_slave_id(nv);
-            }
         } else if (kind == 1) {
             pwm_config_set_rotor_el_id(nv);
-            if (nv == 0 && axis_is_el()) {
-                axis_cache_store_current();
-                s_axis = AxisMode::Az;
-                rotor_rs485_set_slave_id(pwm_config_get_rotor_id());
-                axis_cache_restore(AxisMode::Az);
-                s_pending_force_axis_az_ui = true;
-            } else if (axis_is_el() && nv != 0) {
-                rotor_rs485_set_slave_id(nv);
-            }
         } else {
             pwm_config_set_master_id(nv);
             rotor_rs485_set_master_id(nv);
+        }
+        if (kind != 2) {
+            if (apply_axis_fallback_for_zero_id()) {
+                if (axis_is_el()) {
+                    s_pending_force_axis_el_ui = true;
+                } else {
+                    s_pending_force_axis_az_ui = true;
+                }
+            }
         }
         pwm_config_save();
     }
@@ -600,7 +625,12 @@ extern "C" void rotor_app_config_changed_from_bus(void)
     s_pwm_ui_is_fast = pwm_config_get_pwm_ui_fast() != 0;
     pwm_style_slow_fast(s_pwm_ui_is_fast);
     rotor_rs485_set_master_id(pwm_config_get_master_id());
-    rotor_rs485_set_slave_id(axis_slave_id());
+    const bool axis_switched = apply_axis_fallback_for_zero_id();
+    if (axis_switched) {
+        apply_axis_background();
+        apply_axis_arc_geometry();
+        apply_axis_ui_after_switch();
+    }
     id_fields_sync_textareas_from_config();
     apply_anemometer_weather_tab_visibility();
     encoder_delta_apply_button_label();
@@ -609,6 +639,13 @@ extern "C" void rotor_app_config_changed_from_bus(void)
         s_pwm_deferred = p;
     }
     lvgl_port_unlock();
+    if (axis_switched) {
+        rotor_rs485_send_getref();
+        if (axis_is_el()) {
+            rotor_app_el_limits_changed();
+            rotor_rs485_request_el_rotor_type();
+        }
+    }
 }
 
 static int wrap_tenths_deg(int t)

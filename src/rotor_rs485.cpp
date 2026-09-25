@@ -240,10 +240,24 @@ static bool s_pending_el_limits_changed = false;
 static bool s_el_rotor_type_known = false;
 /** config.json: pwm_config_save() nur im Haupt-loop, nicht im RS485-/USB-Parser (Proxy/FFat/WDT). */
 static bool s_pending_pwm_config_save = false;
+/** Debounce: Speichern erst nach Ruhe / spätestens nach Max-Wartezeit. */
+static uint32_t s_pwm_config_save_first_ms = 0;
+static uint32_t s_pwm_config_save_last_ms = 0;
+#ifndef ROTOR_PWM_CONFIG_SAVE_DEBOUNCE_MS
+#define ROTOR_PWM_CONFIG_SAVE_DEBOUNCE_MS 1500u
+#endif
+#ifndef ROTOR_PWM_CONFIG_SAVE_MAX_WAIT_MS
+#define ROTOR_PWM_CONFIG_SAVE_MAX_WAIT_MS 5000u
+#endif
 
 static inline void schedule_pwm_config_save_from_bus(void)
 {
-    s_pending_pwm_config_save = true;
+    const uint32_t now = millis();
+    if (!s_pending_pwm_config_save) {
+        s_pending_pwm_config_save = true;
+        s_pwm_config_save_first_ms = now;
+    }
+    s_pwm_config_save_last_ms = now;
 }
 
 /** SETASELECT per Bus/USB: Flash/LVGL nur in rotor_rs485_idle_tasks (nicht Parser-/Bridge-Task). */
@@ -640,8 +654,17 @@ void rotor_rs485_idle_tasks(void)
     flush_deferred_ref_ui();
     flush_deferred_target_ui();
     if (s_pending_pwm_config_save) {
-        s_pending_pwm_config_save = false;
-        pwm_config_save();
+        const uint32_t now = millis();
+        const bool quiet =
+            (uint32_t)(now - s_pwm_config_save_last_ms) >= ROTOR_PWM_CONFIG_SAVE_DEBOUNCE_MS;
+        const bool max_wait =
+            (uint32_t)(now - s_pwm_config_save_first_ms) >= ROTOR_PWM_CONFIG_SAVE_MAX_WAIT_MS;
+        if (quiet || max_wait) {
+            s_pending_pwm_config_save = false;
+            s_pwm_config_save_first_ms = 0;
+            s_pwm_config_save_last_ms = 0;
+            pwm_config_save();
+        }
     }
     if (s_pending_remote_antenna) {
         s_pending_remote_antenna = false;
@@ -1942,30 +1965,55 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
         return true;
     }
 
-    if (strstr(line, ":GETCONRID:") || strstr(line, ":GETTCONRID:")) {
-        const char *tag = strstr(line, ":GETTCONRID:") ? ":GETTCONRID:" : ":GETCONRID:";
-        if (!extract_tag_params_cs(line, tag, par, sizeof(par), &cs) || !config_cs_ok(src, dst, par, cs)) {
-            config_reply_nak(src, "NAK_GETCONRID", 2);
+    if (strstr(line, ":GETCONTAZID:")) {
+        if (!CFG_TRY_TAG(":GETCONTAZID:")) {
+            config_reply_nak(src, "NAK_GETCONTAZID", 2);
             return true;
         }
-        config_reply_ack_u8(src, "ACK_GETCONRID", pwm_config_get_rotor_id());
+        config_reply_ack_u8(src, "ACK_GETCONTAZID", pwm_config_get_rotor_id());
         return true;
     }
 
-    if (strstr(line, ":SETCONRID:")) {
-        if (!CFG_TRY_TAG(":SETCONRID:")) {
-            config_reply_nak(src, "NAK_SETCONRID", 2);
+    if (strstr(line, ":SETCONTAZID:")) {
+        if (!CFG_TRY_TAG(":SETCONTAZID:")) {
+            config_reply_nak(src, "NAK_SETCONTAZID", 2);
             return true;
         }
         unsigned v = 0;
-        if (sscanf(par, "%u", &v) != 1 || v < 1u || v > 254u) {
-            config_reply_nak(src, "NAK_SETCONRID", 1);
+        if (sscanf(par, "%u", &v) != 1 || v > 254u) {
+            config_reply_nak(src, "NAK_SETCONTAZID", 1);
             return true;
         }
         pwm_config_set_rotor_id((uint8_t)v);
         schedule_pwm_config_save_from_bus();
         s_pending_config_changed_from_bus = true;
-        config_reply_ack_u8(src, "ACK_SETCONRID", (uint8_t)v);
+        config_reply_ack_u8(src, "ACK_SETCONTAZID", (uint8_t)v);
+        return true;
+    }
+
+    if (strstr(line, ":GETCONTELID:")) {
+        if (!CFG_TRY_TAG(":GETCONTELID:")) {
+            config_reply_nak(src, "NAK_GETCONTELID", 2);
+            return true;
+        }
+        config_reply_ack_u8(src, "ACK_GETCONTELID", pwm_config_get_rotor_el_id());
+        return true;
+    }
+
+    if (strstr(line, ":SETCONTELID:")) {
+        if (!CFG_TRY_TAG(":SETCONTELID:")) {
+            config_reply_nak(src, "NAK_SETCONTELID", 2);
+            return true;
+        }
+        unsigned v = 0;
+        if (sscanf(par, "%u", &v) != 1 || v > 254u) {
+            config_reply_nak(src, "NAK_SETCONTELID", 1);
+            return true;
+        }
+        pwm_config_set_rotor_el_id((uint8_t)v);
+        schedule_pwm_config_save_from_bus();
+        s_pending_config_changed_from_bus = true;
+        config_reply_ack_u8(src, "ACK_SETCONTELID", (uint8_t)v);
         return true;
     }
 

@@ -950,12 +950,20 @@
 <td><code>ACK_GETCOVERSION</code> / <code>NAK_GETCOVERSION</code> — Firmware‑Version des Display‑Controllers (<code>FIRMWARE_APP_VERSION</code>, z.&nbsp;B. <code>1.3.0</code>), für eine stabile CS mit <code>;0</code> angehängt (analog <code>GETCONANTNAME*</code>).</td>
 </tr>
 <tr>
-<td><code>GETCONRID</code> / <code>GETTCONRID</code> (Alias)</td>
-<td><code>ACK_GETCONRID</code> (Parameter = aktuelle <code>rotor_id</code>)</td>
+<td><code>GETCONTAZID</code></td>
+<td><code>ACK_GETCONTAZID</code> (Parameter = aktuelle <code>rotor_id</code> / AZ‑Slave‑ID, <b>0…254</b>; <code>0</code> = Achse aus). Beispiel: <code>#1:2:GETCONTAZID:0:3$</code> → <code>#2:1:ACK_GETCONTAZID:20:…$</code>.</td>
 </tr>
 <tr>
-<td><code>SETCONRID</code></td>
-<td><code>ACK_SETCONRID</code> / <code>NAK_SETCONRID</code> (Rotor‑Slave‑ID 1…254)</td>
+<td><code>SETCONTAZID</code></td>
+<td><code>ACK_SETCONTAZID</code> / <code>NAK_SETCONTAZID</code> — AZ‑Rotor‑Slave‑ID <b>0…254</b> setzen und speichern (<code>0</code> = Achse aus). Sofort übernommen (aktive Achse ggf. auf EL). Beispiel: <code>#1:2:SETCONTAZID:22:25$</code> (<code>CS = 1 + 2 + 22</code>).</td>
+</tr>
+<tr>
+<td><code>GETCONTELID</code></td>
+<td><code>ACK_GETCONTELID</code> (Parameter = aktuelle <code>rotor_el_id</code> / EL‑Slave‑ID, <b>0…254</b>; <code>0</code> = Achse aus).</td>
+</tr>
+<tr>
+<td><code>SETCONTELID</code></td>
+<td><code>ACK_SETCONTELID</code> / <code>NAK_SETCONTELID</code> — EL‑Rotor‑Slave‑ID <b>0…254</b> setzen und speichern (<code>0</code> = Achse aus). Sofort übernommen (aktive Achse ggf. auf AZ). Beispiel: <code>#1:2:SETCONTELID:21:24$</code> (<code>CS = 1 + 2 + 21</code>).</td>
 </tr>
 <tr>
 <td><code>GETCONTID</code></td>
