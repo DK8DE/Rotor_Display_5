@@ -47,17 +47,23 @@ static float s_axis_max_deg = 360.0f;
 
 static int parse_int_after_key(const char *json, const char *key)
 {
-    const char *p = strstr(json, key);
+    /* Exakt "key": … — kein Teilstring-Match (z. B. "lsl" in anderen Feldern). */
+    char pat[48];
+    snprintf(pat, sizeof(pat), "\"%s\"", key);
+    const char *p = strstr(json, pat);
     if (!p) {
         return -1;
     }
-    p = strchr(p, ':');
+    p = strchr(p + 1, ':');
     if (!p) {
         return -1;
     }
     ++p;
     while (*p && *p != '-' && (*p < '0' || *p > '9')) {
         ++p;
+    }
+    if (*p == '\0') {
+        return -1;
     }
     return atoi(p);
 }
@@ -142,7 +148,7 @@ void pwm_config_load_defaults(void)
     s_led_ring_brightness_pct = 100;
 }
 
-static char s_last_written[896];
+static char s_last_written[1536];
 static bool s_last_written_valid = false;
 
 static size_t render_config_json(char *out, size_t sz)
@@ -154,6 +160,7 @@ static size_t render_config_json(char *out, size_t sz)
     escape_json_string(s_ant_label[0], e1, sizeof(e1));
     escape_json_string(s_ant_label[1], e2, sizeof(e2));
     escape_json_string(s_ant_label[2], e3, sizeof(e3));
+    /* Skalare (confrq/lsl/IDs) vor den langen Labels — beim Lesen nicht abschneiden. */
     const int n = snprintf(out, sz,
              "{\n"
              "  \"slow_pwm\": %u,\n"
@@ -162,22 +169,22 @@ static size_t render_config_json(char *out, size_t sz)
              "  \"master_id\": %u,\n"
              "  \"rotor_id\": %u,\n"
              "  \"rotor_el_id\": %u,\n"
-             "  \"antenna_1_label\": \"%s\",\n"
-             "  \"antenna_2_label\": \"%s\",\n"
-             "  \"antenna_3_label\": \"%s\",\n"
              "  \"last_antenna\": %u,\n"
              "  \"confrq\": %u,\n"
              "  \"lsl\": %u,\n"
              "  \"anemometer\": %u,\n"
              "  \"encoder_delta\": %u,\n"
              "  \"concha\": %u,\n"
-             "  \"conledp\": %u\n"
+             "  \"conledp\": %u,\n"
+             "  \"antenna_1_label\": \"%s\",\n"
+             "  \"antenna_2_label\": \"%s\",\n"
+             "  \"antenna_3_label\": \"%s\"\n"
              "}\n",
              (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_pwm_ui_fast, (unsigned)s_master_id,
-             (unsigned)s_rotor_id, (unsigned)s_rotor_el_id, e1, e2, e3,
+             (unsigned)s_rotor_id, (unsigned)s_rotor_el_id,
              (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol,
              (unsigned)s_anemometer, (unsigned)s_encoder_delta_tenths, (unsigned)s_concha,
-             (unsigned)s_led_ring_brightness_pct);
+             (unsigned)s_led_ring_brightness_pct, e1, e2, e3);
     if (n < 0 || (size_t)n >= sz) {
         out[0] = '\0';
         return 0;
@@ -193,7 +200,8 @@ void pwm_config_load(void)
         pwm_config_save();
         return;
     }
-    char buf[768];
+    /* Groß genug für Labels + Skalare (render_config_json bis ~1,5 KB). */
+    char buf[1536];
     size_t n = f.readBytes(buf, sizeof(buf) - 1);
     f.close();
     buf[n] = '\0';
@@ -258,7 +266,7 @@ void pwm_config_load(void)
 
 void pwm_config_save(void)
 {
-    char line[896];
+    char line[1536];
     if (render_config_json(line, sizeof(line)) == 0) {
         return;
     }

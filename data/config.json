@@ -4,13 +4,13 @@
   "master_id": 2,
   "rotor_id": 20,
   "rotor_el_id": 21,
-  "antenna_1_label": "ANTENNE 1",
-  "antenna_2_label": "ANTENNE 2",
-  "antenna_3_label": "ANTENNE 3",
   "last_antenna": 1,
   "confrq": 1100,
   "lsl": 14,
   "anemometer": 0,
   "encoder_delta": 1,
-  "concha": 0
+  "concha": 0,
+  "antenna_1_label": "ANTENNE 1",
+  "antenna_2_label": "ANTENNE 2",
+  "antenna_3_label": "ANTENNE 3"
 }

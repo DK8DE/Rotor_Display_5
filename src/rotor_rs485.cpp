@@ -260,6 +260,17 @@ static inline void schedule_pwm_config_save_from_bus(void)
     s_pwm_config_save_last_ms = now;
 }
 
+/** Wie schedule, aber nächstes idle_tasks speichert sofort (Pieps/kritische Einzelwerte). */
+static inline void schedule_pwm_config_save_from_bus_now(void)
+{
+    const uint32_t now = millis();
+    if (!s_pending_pwm_config_save) {
+        s_pending_pwm_config_save = true;
+        s_pwm_config_save_first_ms = now;
+    }
+    s_pwm_config_save_last_ms = now - ROTOR_PWM_CONFIG_SAVE_DEBOUNCE_MS;
+}
+
 /** SETASELECT per Bus/USB: Flash/LVGL nur in rotor_rs485_idle_tasks (nicht Parser-/Bridge-Task). */
 static bool s_pending_remote_antenna = false;
 static uint8_t s_remote_ant_orig_prev = 1;
@@ -2115,7 +2126,7 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
             return true;
         }
         pwm_config_set_touch_beep_freq_hz((uint16_t)v);
-        schedule_pwm_config_save_from_bus();
+        schedule_pwm_config_save_from_bus_now();
         config_reply_ack_u16(src, "ACK_SETCONFRQ", pwm_config_get_touch_beep_freq_hz());
         return true;
     }
@@ -2140,7 +2151,7 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
             return true;
         }
         pwm_config_set_touch_beep_vol((uint8_t)v);
-        schedule_pwm_config_save_from_bus();
+        schedule_pwm_config_save_from_bus_now();
         config_reply_ack_u8(src, "ACK_SETLSL", pwm_config_get_touch_beep_vol());
         return true;
     }
