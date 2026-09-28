@@ -17,14 +17,14 @@ void rotor_error_app_loop(uint32_t now_ms);
 
 /**
  * Fehlercode setzen (0 = keiner).
- * Typisch: lokaler Verbindungs-Watchdog → Code 10 (soft, quittierbar bei Slave-Verkehr).
+ * Typisch: lokaler Verbindungs-Watchdog → Code 10 (soft, quittierbar per SETREF).
  */
 void rotor_error_app_set_error_code(int code);
 
 /**
  * Fehler vom Rotor (asynchrones ERR / ACK_ERR).
- * Auch Code 10 latched als Störung (nicht sofort durch nächstes ACK löschen).
- * ACK_ERR:0 → report_rotor_err(0) quittiert softes/Rotor-10.
+ * Code 10 (Deadman): quittierbar per SETREF / Homing-Taste (kein Neustart nötig).
+ * ACK_ERR:0 → report_rotor_err(0) quittiert Fehler 10.
  */
 void rotor_error_app_report_rotor_err(int code);
 
@@ -37,8 +37,8 @@ bool rotor_error_app_is_rotor_reported(void);
 bool rotor_error_app_is_fault_ring_red(void);
 
 /**
- * True bei Störung: kein Homing/Tasten.
- * Lokaler Watchdog-Code 10 ausgenommen; Rotor-ERR:10 sperrt.
+ * True bei Störung: kein Homing/Tasten (außer Fehler 10).
+ * Fehler 10 (Deadman / Link-Timeout) ist per Homing-Taste / SETREF quittierbar.
  */
 bool rotor_error_app_is_fault_locked(void);
 

@@ -1229,9 +1229,13 @@ void rotor_rs485_request_el_rotor_type(void)
 
 void rotor_rs485_send_setref_homing(void)
 {
-    /* Laufende Positions-Telegramme abbrechen, sonst blockiert pending == SetPosDg den Homing-Start */
-    if (s_pending == Pending::SetPosDg || s_pending == Pending::GetPosDg) {
-        clear_pending();
+    /* Laufende Positions-Telegramme abbrechen, sonst blockiert pending == SetPosDg den Homing-Start.
+     * Bei Fehler 10 (Deadman-Quittung) jedes Pending verwerfen — SETREF muss raus. */
+    const bool force_for_err10 = (rotor_error_app_get_error_code() == 10);
+    if (s_pending == Pending::SetPosDg || s_pending == Pending::GetPosDg || force_for_err10) {
+        if (s_pending != Pending::None) {
+            clear_pending();
+        }
         s_poll_pos = false;
         s_pos_grace_end_ms = 0;
         s_hw_snap_retarget_active = false;
@@ -1239,6 +1243,11 @@ void rotor_rs485_send_setref_homing(void)
         s_resume_poll_pos_after_conn_loss = false;
     } else if (s_pending != Pending::None) {
         return;
+    }
+    /* SETREF quittiert Fehler 10 (Deadman) am Rotor — lokal sofort freigeben. */
+    if (rotor_error_app_get_error_code() == 10) {
+        rotor_error_app_report_rotor_err(0);
+        rotor_error_app_set_error_code(0);
     }
     send_request("SETREF", "1", Pending::SetRef);
     s_poll_ref = true;
@@ -2341,15 +2350,20 @@ static void dispatch_bus_command_to_slave(const char *line, unsigned src)
         return;
     }
 
-    /* PC-Client (anderer Master): SETREF:1 → gleiche Homing-Flags wie rotor_rs485_send_setref_homing()
-     * (LED, Meldetext „Referenziere“, NeoPixel-Lauflicht, GETREF bis referenziert). */
+    /* PC-Client (anderer Master): SETREF → Fehler 10 quittieren; SETREF:1 → Homing-Flags. */
     if (src != (unsigned)s_master_id) {
         int ref_cmd = 0;
-        if (parse_setref_command_param(line, &ref_cmd) && ref_cmd != 0) {
-            s_poll_ref = true;
-            s_request_pos_after_homing = true;
-            s_homing_wait_unref_seen = true;
-            s_next_ref_poll_ms = millis() + ROTOR_POLL_GAP_MS;
+        if (parse_setref_command_param(line, &ref_cmd)) {
+            if (rotor_error_app_get_error_code() == 10) {
+                rotor_error_app_report_rotor_err(0);
+                rotor_error_app_set_error_code(0);
+            }
+            if (ref_cmd != 0) {
+                s_poll_ref = true;
+                s_request_pos_after_homing = true;
+                s_homing_wait_unref_seen = true;
+                s_next_ref_poll_ms = millis() + ROTOR_POLL_GAP_MS;
+            }
         }
     }
 
@@ -2818,6 +2832,11 @@ static bool parse_ack_setref_result(const char *line)
     }
     if (s_pending == Pending::SetRef) {
         clear_pending();
+    }
+    /* SETREF quittiert Deadman/Timeout am Rotor — Latch lokal mitnehmen. */
+    if (rotor_error_app_get_error_code() == 10) {
+        rotor_error_app_report_rotor_err(0);
+        rotor_error_app_set_error_code(0);
     }
     if (s_poll_ref) {
         s_next_ref_poll_ms = millis() + ROTOR_POLL_GAP_MS;

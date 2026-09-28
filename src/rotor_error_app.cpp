@@ -1,8 +1,7 @@
 /**
  * Meldungen zu GETERR / async ERR; UI: meldetext, homing_led, Ring-Override in signals_ring_app.
- * Fehler bleiben bis Neustart, Ausnahme: lokaler Verbindungstimeout (10) — wird bei wiederkehrendem
- * Slave-Verkehr / ACK_ERR:0 zurückgesetzt. Vom Rotor per ERR/ACK_ERR gemeldetes 10 latched wie
- * andere Fehler (Broadcast #rotor:255:ERR:10:…), damit es nicht sofort wieder verschwindet.
+ * Fehler bleiben bis Neustart, Ausnahme: Fehler 10 (Deadman / lokaler Verbindungstimeout) —
+ * per Homing-Taste (SETREF) oder wiederkehrendem Slave-Verkehr / ACK_ERR:0 quittierbar.
  */
 
 #include "rotor_error_app.h"
@@ -27,7 +26,7 @@ static int s_err_code = 0;
 static uint32_t s_err_set_ms = 0;
 static uint32_t s_led_blink_last_ms = 0;
 static bool s_led_blink_bright = true;
-/** Abwechselnd Fehlertext und Neustart-Hinweis (UI-String) pro Sekunde */
+/** Abwechselnd Fehlertext und Hinweis (UI-String) pro Sekunde */
 static uint32_t s_meldetext_last_alternate_sec = UINT32_MAX;
 /** true = Code kam vom Rotor (ERR/ACK_ERR), nicht vom lokalen Verbindungs-Watchdog */
 static bool s_err_from_rotor = false;
@@ -38,7 +37,8 @@ static const char *message_for_code(int code)
     case 0:
         return "Betriebsbereit";
     case 10:
-        return "Verbindungstimeout";
+        /* Rotor-Deadman vs. lokaler Link-Watchdog — gleiche Quittung (SETREF / Homing-Taste). */
+        return s_err_from_rotor ? "Deadman Timeout" : "Verbindungstimeout";
     case 11:
         return "Endschalter Fehler";
     case 12:
@@ -61,10 +61,18 @@ static void apply_fault_meldetext_alternate(uint32_t now_ms)
     if (!objects.meldetext || s_err_code == 0) {
         return;
     }
-    /* Lokaler Fehler 10: kein Wechsel zur Neustart-Zeile — Verbindung kann ohne Neustart wiederkehren.
-     * Rotor-gemeldetes 10: wie harte Fehler abwechselnd mit Neustart-Hinweis. */
-    if (s_err_code == 10 && !s_err_from_rotor) {
-        lv_textarea_set_text(objects.meldetext, "Verbindungstimeout");
+    /* Fehler 10: kein „Bitte Neustart“ — Quittierung per Homing-Taste (SETREF). */
+    if (s_err_code == 10) {
+        const uint32_t sec = now_ms / 1000u;
+        if (sec == s_meldetext_last_alternate_sec) {
+            return;
+        }
+        s_meldetext_last_alternate_sec = sec;
+        if ((sec % 2u) == 0u) {
+            lv_textarea_set_text(objects.meldetext, message_for_code(10));
+        } else {
+            lv_textarea_set_text(objects.meldetext, "Homing-Taste");
+        }
         return;
     }
     const uint32_t sec = now_ms / 1000u;
@@ -126,8 +134,8 @@ static void apply_homing_led_fault(uint32_t now_ms)
     if (!objects.homing_led) {
         return;
     }
-    /* Harte Fehler inkl. Rotor-ERR:10: rot blinken. Nur lokaler Watchdog-10 bleibt soft. */
-    if (rotor_error_app_is_fault_locked()) {
+    /* Harte Fehler: rot blinken. Fehler 10 (quittierbar): ebenfalls blinken bis SETREF. */
+    if (s_err_code != 0) {
         if ((uint32_t)(now_ms - s_led_blink_last_ms) < ROTOR_ERR_LED_BLINK_MS) {
             return;
         }
@@ -169,19 +177,14 @@ void rotor_error_app_set_error_code(int code)
     if (code < 0) {
         code = 0;
     }
-    /* Latch: Fehler bleibt bis Neustart — Ausnahme lokaler Verbindungstimeout (10) per Bus quittierbar.
-     * Vom Rotor gemeldetes 10 latched wie andere Codes (nur Neustart / explizit 0 wenn nicht from_rotor). */
+    /* Latch: Fehler bleibt bis Neustart — Ausnahme Fehler 10 (Deadman / Link) per SETREF quittierbar. */
     if (code == 0) {
         if (s_err_code != 0 && s_err_code != 10) {
             return;
         }
-        if (s_err_code == 10 && s_err_from_rotor) {
-            /* Rotor-ERR:10 nicht durch lokales set_error_code(0) loeschen — nur report_rotor(0). */
-            return;
-        }
         s_err_from_rotor = false;
     } else if (code == 10) {
-        /* Aufruf vom Watchdog / Boot-TEST: lokaler Soft-Timeout */
+        /* Aufruf vom Watchdog / Boot-TEST: lokaler Soft-Timeout (Rotor-10 kommt über report_rotor). */
         s_err_from_rotor = false;
     }
     if (s_err_code != code) {
@@ -202,8 +205,7 @@ void rotor_error_app_report_rotor_err(int code)
         code = 0;
     }
     if (code == 0) {
-        /* ACK_ERR:0 — auch Rotor-Fehler 10 und Latch anderer Codes? Andere Codes bleiben bis Neustart.
-         * Nur 10 bzw. kein Fehler: quittieren. */
+        /* ACK_ERR:0 / SETREF-Quittung: Fehler 10 löschen; andere Codes bleiben bis Neustart. */
         if (s_err_code != 0 && s_err_code != 10) {
             return;
         }
@@ -254,8 +256,8 @@ bool rotor_error_app_is_fault_locked(void)
     if (s_err_code == 0) {
         return false;
     }
-    /* Lokaler Verbindungstimeout (10) bleibt bedienbar; Rotor-ERR:10 sperrt wie andere Fehler. */
-    if (s_err_code == 10 && !s_err_from_rotor) {
+    /* Fehler 10 (Deadman / Verbindungstimeout): Homing-Taste / SETREF quittiert — nicht sperren. */
+    if (s_err_code == 10) {
         return false;
     }
     return true;

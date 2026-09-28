@@ -208,7 +208,7 @@ static void SingleClickCb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
-    /* Fehler: kein Homing/Bus — nur UI-Feedback */
+    /* Harte Fehler: kein Homing/Bus — nur UI-Feedback */
     if (rotor_error_app_is_fault_locked()) {
         lvgl_port_lock(-1);
         LVGL_button_event((void *)(intptr_t)BUTTON_SINGLE_CLICK);
@@ -216,6 +216,15 @@ static void SingleClickCb(void *button_handle, void *usr_data)
         return;
     }
     if (rotor_app_commit_id_field_on_hw_click()) {
+        lvgl_port_lock(-1);
+        LVGL_button_event((void *)(intptr_t)BUTTON_SINGLE_CLICK);
+        lvgl_port_unlock();
+        return;
+    }
+    /* Fehler 10 (Deadman / Verbindungstimeout): kurzer Tastendruck = SETREF:1 —
+     * quittiert den Fehler am Rotor und startet Homing (Normalzustand wiederherstellen). */
+    if (rotor_error_app_get_error_code() == 10) {
+        rotor_rs485_send_setref_homing();
         lvgl_port_lock(-1);
         LVGL_button_event((void *)(intptr_t)BUTTON_SINGLE_CLICK);
         lvgl_port_unlock();
