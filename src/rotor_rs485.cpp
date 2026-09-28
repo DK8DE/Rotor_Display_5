@@ -256,8 +256,17 @@ static inline void schedule_pwm_config_save_from_bus(void)
     if (!s_pending_pwm_config_save) {
         s_pending_pwm_config_save = true;
         s_pwm_config_save_first_ms = now;
+        s_pwm_config_save_last_ms = now;
+        return;
     }
-    s_pwm_config_save_last_ms = now;
+    /* Schon pending und bereits „sofort“ fällig (z. B. nach SETCONFRQ): Debounce nicht
+     * durch spätere Soft-Saves (Antennenname/PWM) wieder auf 1,5 s hochziehen — sonst
+     * geht confrq bei schnellem Reset verloren und bleibt der alte Wert (oft 500). */
+    const bool already_due =
+        (uint32_t)(now - s_pwm_config_save_last_ms) >= ROTOR_PWM_CONFIG_SAVE_DEBOUNCE_MS;
+    if (!already_due) {
+        s_pwm_config_save_last_ms = now;
+    }
 }
 
 /** Wie schedule, aber nächstes idle_tasks speichert sofort (Pieps/kritische Einzelwerte). */

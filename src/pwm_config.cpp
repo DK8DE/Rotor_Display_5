@@ -68,57 +68,6 @@ static int parse_int_after_key(const char *json, const char *key)
     return atoi(p);
 }
 
-/** "key": "value" — value ohne escapte Anführungszeichen in value */
-static bool parse_string_quoted(const char *json, const char *key, char *out, size_t out_sz)
-{
-    char pat[48];
-    snprintf(pat, sizeof(pat), "\"%s\"", key);
-    const char *p = strstr(json, pat);
-    if (!p) {
-        return false;
-    }
-    p = strchr(p + 1, ':');
-    if (!p) {
-        return false;
-    }
-    ++p;
-    while (*p && (*p == ' ' || *p == '\t')) {
-        ++p;
-    }
-    if (*p != '"') {
-        return false;
-    }
-    ++p;
-    if (*p == '"') {
-        out[0] = '\0';
-        return true;
-    }
-    size_t n = 0;
-    while (*p && *p != '"' && n + 1 < out_sz) {
-        out[n++] = *p++;
-    }
-    out[n] = '\0';
-    return true;
-}
-
-static void escape_json_string(const char *in, char *out, size_t out_sz)
-{
-    size_t o = 0;
-    if (!in || !out || out_sz < 4) {
-        return;
-    }
-    while (*in && o + 2 < out_sz) {
-        if (*in == '"' || *in == '\\') {
-            if (o + 3 >= out_sz) {
-                break;
-            }
-            out[o++] = '\\';
-        }
-        out[o++] = *in++;
-    }
-    out[o] = '\0';
-}
-
 void pwm_config_load_defaults(void)
 {
     s_slow = 50;
@@ -156,11 +105,8 @@ static size_t render_config_json(char *out, size_t sz)
     if (!out || sz < 4) {
         return 0;
     }
-    char e1[96], e2[96], e3[96];
-    escape_json_string(s_ant_label[0], e1, sizeof(e1));
-    escape_json_string(s_ant_label[1], e2, sizeof(e2));
-    escape_json_string(s_ant_label[2], e3, sizeof(e3));
-    /* Skalare (confrq/lsl/IDs) vor den langen Labels — beim Lesen nicht abschneiden. */
+    /* Nur Skalare — Antennennamen kommen vom Rotor (GETANTNAME), nicht aus der Datei.
+     * Früher Labels in JSON → bei langen Namen Truncation → confrq ging verloren. */
     const int n = snprintf(out, sz,
              "{\n"
              "  \"slow_pwm\": %u,\n"
@@ -175,16 +121,13 @@ static size_t render_config_json(char *out, size_t sz)
              "  \"anemometer\": %u,\n"
              "  \"encoder_delta\": %u,\n"
              "  \"concha\": %u,\n"
-             "  \"conledp\": %u,\n"
-             "  \"antenna_1_label\": \"%s\",\n"
-             "  \"antenna_2_label\": \"%s\",\n"
-             "  \"antenna_3_label\": \"%s\"\n"
+             "  \"conledp\": %u\n"
              "}\n",
              (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_pwm_ui_fast, (unsigned)s_master_id,
              (unsigned)s_rotor_id, (unsigned)s_rotor_el_id,
              (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol,
              (unsigned)s_anemometer, (unsigned)s_encoder_delta_tenths, (unsigned)s_concha,
-             (unsigned)s_led_ring_brightness_pct, e1, e2, e3);
+             (unsigned)s_led_ring_brightness_pct);
     if (n < 0 || (size_t)n >= sz) {
         out[0] = '\0';
         return 0;
@@ -258,9 +201,17 @@ void pwm_config_load(void)
     if (ledb >= 0 && ledb <= 100) {
         s_led_ring_brightness_pct = (uint8_t)ledb;
     }
-    /* Nach Load: Snapshot für Schreibunterdrückung (kein unnötiger Rewrite beim ersten Save). */
-    if (render_config_json(s_last_written, sizeof(s_last_written)) > 0) {
-        s_last_written_valid = true;
+    /* Nach Load: Snapshot; bei abweichendem Datei-Layout (alte Labels-JSON) sofort migrieren. */
+    char rendered[1536];
+    if (render_config_json(rendered, sizeof(rendered)) > 0) {
+        if (strcmp(buf, rendered) != 0) {
+            s_last_written_valid = false;
+            pwm_config_save();
+        } else {
+            strncpy(s_last_written, rendered, sizeof(s_last_written) - 1);
+            s_last_written[sizeof(s_last_written) - 1] = '\0';
+            s_last_written_valid = true;
+        }
     }
 }
 
