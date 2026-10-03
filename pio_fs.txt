@@ -1,0 +1,47 @@
+﻿Processing esp32-s3-viewe (platform: https://github.com/pioarduino/platform-espressif32/releases/download/55.03.39/platform-espressif32.zip; board: esp32-s3-devkitc1-n16r8; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/esp32-s3-devkitc1-n16r8.html
+PLATFORM: Espressif 32 (55.3.39) > Espressif ESP32-S3-DevKitC-1-N16R8V (16 MB Flash Quad, 8 MB PSRAM Octal)
+HARDWARE: ESP32S3 240MHz, 320KB RAM, 16MB Flash
+DEBUG: Current (esp-builtin) On-board (esp-builtin) External (cmsis-dap, esp-bridge, esp-prog, esp-prog-2, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - contrib-piohome @ 3.4.4 
+ - framework-arduinoespressif32 @ 3.3.9 
+ - framework-arduinoespressif32-libs @ 5.5.4+sha.735507283d 
+ - tool-esptoolpy @ 5.3.0 
+ - tool-xtensa-esp-elf-gdb @ 17.1.0+20260402 
+ - toolchain-xtensa-esp-elf @ 14.2.0+20260121
+*** WARNING: Windows Long Path Support is disabled ***
+*** Enable it for better performance: ***
+*** 1. Run as Administrator: gpedit.msc ***
+*** 2. Navigate to: Computer Configuration > Administrative Templates > System > Filesystem ***
+*** 3. Enable 'Enable Win32 long paths' ***
+*** OR run PowerShell as Admin: ***
+*** New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1 -PropertyType DWORD -Force ***
+*** Restart required after enabling ***
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ off, Compatibility ~ soft
+Found 52 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- Adafruit NeoPixel @ 1.15.5
+Building in release mode
+Building FS image from 'data' directory to .pio\build\esp32-s3-viewe\fatfs.bin
+
+Boot sector validation:
+  Bytes per sector: 4096
+  Reserved sectors: 1
+  Number of FATs: 2
+  Sectors per FAT: 1
+  Total sectors: 2524
+
+Wrapping FAT image with ESP-IDF wear leveling...
+  Layout: [dummy:4096] [FAT:10338304] [state1:4096] [state2:4096] [config:4096]
+  Partition size: 10354688 bytes
+  FAT filesystem size: 10338304 bytes (2524 sectors)
+  WL overhead: 4 sectors (16384 bytes)
+  WL-wrapped image created (10354688 bytes)
+
+Successfully created ESP-IDF WL-wrapped FAT image: .pio\build\esp32-s3-viewe\fatfs.bin
+========================= [SUCCESS] Took 2.22 seconds =========================

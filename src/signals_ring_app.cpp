@@ -13,6 +13,7 @@
 #include "rotor_app.h"
 #include "rotor_error_app.h"
 #include "rotor_rs485.h"
+#include "serial_bridge.h"
 #include <Signals.h>
 
 #ifndef SIGNALS_RING_MIN_INTERVAL_MS
@@ -274,6 +275,14 @@ void signals_ring_app_loop(uint32_t now_ms)
         return;
     }
     s_last_draw_ms = now_ms;
+
+    if (rotor_error_app_is_waiting_for_pc()) {
+        for (uint8_t i = 0; i < s_n; i++) {
+            frame_set(i, 255, 200, 0, pwm_config_scale_led_ring_brightness(100));
+        }
+        frame_flush(now_ms);
+        return;
+    }
 
     if (rotor_error_app_is_fault_ring_red()) {
         for (uint8_t i = 0; i < s_n; i++) {

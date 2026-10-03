@@ -8,6 +8,7 @@ Stand: 2026-08-03 • Fokus: RS485‑Befehle, Einstellungen (INO), Kalibrierung/
 - [2. Encoder‑Varianten (Typ 1/2/3)](#encoders)
 - [3. RS485‑Befehle – Tabelle](#cmd-table)
 - [Hardwarecontroller Configuration (Display‑Controller)](#hw-controller-config)
+- [Controller Remote USB](#controller-remote-usb)
 - [4. RS485‑Befehle – Erklärung & Empfehlungen](#cmd-details)
 - [5. INO‑Konfig‑Variablen – Tabelle](#vars-table)
 - [6. INO‑Variablen – Erklärung & gute Werte](#vars-details)
@@ -308,6 +309,7 @@ Schreibbefehle speichern in `config.json` (Slow/Fast‑PWM, IDs, Antennen‑Labe
 | `GETCONFRQ` / `SETCONFRQ` | `ACK_GETCONFRQ` / `ACK_SETCONFRQ` — Touch‑Pieps‑Frequenz in Hz (200…4000), in `config.json` als `confrq`. |
 | `GETLSL` / `SETLSL` | `ACK_GETLSL` / `ACK_SETLSL` — Touch‑Pieps‑Lautstärke 0…50 (wie `Signals::tone`), in `config.json` als `lsl`. |
 | `GETCONANO` / `SETCONANO` | `ACK_GETCONANO` / `ACK_SETCONANO` (bzw. `NAK_SETCONANO`) — Anemometer/Wetter‑Tab: `1` = Wind, Außentemperatur und Windrichtung im Wetter‑Tab; `0` = Wetter‑Tab aus, `GETTEMPA` für Außentemp (Rotor\_Info) bleibt. JSON `anemometer`. |
+| `GETCONREMOTE` / `SETCONREMOTE` | `ACK_GETCONREMOTE` / `ACK_SETCONREMOTE` (bzw. `NAK_SETCONREMOTE`) — **Controller Remote USB**: `1` = kein RS485‑TX zum Rotor (UART‑TX‑Pin hochohmig), alle Controller‑Telegramme nur über USB zur PC‑Software; `0` = normaler Bus‑Betrieb. JSON `remote_usb`. Beim Einschalten und nach längerem USB‑Link‑Verlust (~15 s ohne PC‑Byte) startet der Controller die Boot‑Kette neu (`rotor_rs485_relink`) — **nicht** bei kurzen Sendepausen. Ohne PC: Meldetext „Warten auf PC“, LED-Ring gelb (kein Soft-10/Verbindungstimeout-Wechsel). Mit PC: „Remote USB“. RS485-TX bleibt physisch stumm (UART-TX hochohmig); Bus-RX wird nicht ausgewertet. |
 | `GETCONDELTA` / `SETCONDELTA` | `ACK_GETCONDELTA` / `ACK_SETCONDELTA` (bzw. `NAK_SETCONDELTA`) — Encoder‑Schritt pro Raste: `1` oder `10` Zehntelgrad (0,1° bzw. 1° pro Klick). JSON `encoder_delta`. |
 | `GETCONCHA` / `SETCONCHA` | `ACK_GETCONCHA` / `ACK_SETCONCHA` (bzw. `NAK_SETCONCHA`) — Verhalten beim Antennenwechsel: `1` = Anzeige‑Soll (`taget`) beibehalten, `SETPOSDG` mit neuer Antennen‑Geometrie; `0` = `taget` auf die aktuelle Ist‑Anzeige (Kompass) setzen, kein zusätzliches SETPOS. JSON `concha`. |
 | `GETCONLEDP` / `SETCONLEDP` | `ACK_GETCONLEDP` / `ACK_SETCONLEDP` (bzw. `NAK_*`) — NeoPixel‑Ring global 0…100 %. JSON `conledp`. |
@@ -318,6 +320,20 @@ Schreibbefehle speichern in `config.json` (Slow/Fast‑PWM, IDs, Antennen‑Labe
 **NAK‑Codes (typisch):** `1` = ungültiger Wertebereich oder verbotenes Zeichen im Namen; `2` = Checksumme/Format passt nicht.
 
 **GET‑Anfragen** verwenden wie üblich z. B. `PARAMS = 0` (letzter Zahlenwert für die CS‑Bildung).
+
+### Controller Remote USB {#controller-remote-usb}
+
+Wenn `SETCONREMOTE:1` aktiv ist, nimmt der Display‑Controller **keinen** eigenen RS485‑Kontakt zum Rotor mehr auf. Stattdessen:
+
+1. Der Controller sendet seine normalen Master‑Telegramme (`TEST`, `GETREF`, `GETPOSDG`, Antennen‑/Encoder‑Boot, Wetter, …) nur über **USB‑CDC**.
+2. Die PC‑Software (`RotorTcpBridge`, Einstellungen → Controller → „Controller Remote USB“) öffnet einen zweiten Link (`controller_link`, COM) und arbeitet als **transparenter Proxy**:
+   - alles vom Controller → unverändert an den Rotor‑Link (`hardware_link`, meist TCP/IP)
+   - alles vom Rotor‑Link‑RX → unverändert zurück an den Controller
+   - eigene Software‑TX nur bei Steuerbefehlen (`SETPOSDG`/`SETPOSCC`/`STOP`/`SETREF`/`SETASELECT`/…) — kein Poll‑Flood auf USB
+3. Relink (Boot‑Kette neu) nur bei erstem PC‑Kontakt bzw. nach ~15 s ohne USB‑Byte — nicht bei Idle‑Pausen unter 15 s.
+4. Ohne PC-Link (bzw. nach ~1,5 s ohne USB-Byte): Meldetext „Warten auf PC“, LED-Ring gelb — kein Soft-10 („Verbindungstimeout“ / Homing-Wechsel). Relink erst nach ~15 s Pause und erneutem PC-Kontakt.
+5. Controller‑Konfiguration (`SETCON*` / `GETCON*` / `SETLSL`) läuft über denselben USB‑Link (Ziel = `cont_id`).
+6. Profilwechsel in der Software schreibt weiterhin abweichende Achsen‑IDs (`SETCONTAZID` / `SETCONTELID`) — im Remote‑Modus über USB.
 
 [↑ Inhaltsverzeichnis](#toc)
 

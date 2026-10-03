@@ -1,0 +1,669 @@
+﻿Processing esp32-s3-viewe (platform: https://github.com/pioarduino/platform-espressif32/releases/download/55.03.39/platform-espressif32.zip; board: esp32-s3-devkitc1-n16r8; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/esp32-s3-devkitc1-n16r8.html
+PLATFORM: Espressif 32 (55.3.39) > Espressif ESP32-S3-DevKitC-1-N16R8V (16 MB Flash Quad, 8 MB PSRAM Octal)
+HARDWARE: ESP32S3 240MHz, 320KB RAM, 16MB Flash
+DEBUG: Current (esp-builtin) On-board (esp-builtin) External (cmsis-dap, esp-bridge, esp-prog, esp-prog-2, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - contrib-piohome @ 3.4.4 
+ - framework-arduinoespressif32 @ 3.3.9 
+ - framework-arduinoespressif32-libs @ 5.5.4+sha.735507283d 
+ - tool-esptoolpy @ 5.3.0 
+ - tool-xtensa-esp-elf-gdb @ 17.1.0+20260402 
+ - toolchain-xtensa-esp-elf @ 14.2.0+20260121
+*** WARNING: Windows Long Path Support is disabled ***
+*** Enable it for better performance: ***
+*** 1. Run as Administrator: gpedit.msc ***
+*** 2. Navigate to: Computer Configuration > Administrative Templates > System > Filesystem ***
+*** 3. Enable 'Enable Win32 long paths' ***
+*** OR run PowerShell as Admin: ***
+*** New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1 -PropertyType DWORD -Force ***
+*** Restart required after enabling ***
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 52 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- Adafruit NeoPixel @ 1.15.5
+|-- ESP32_Display_Panel @ 1.0.3
+|-- esp-lib-utils @ 0.3.0
+|-- ESP32_Button @ 0.0.1
+|-- ESP32_Knob @ 0.0.1
+|-- FFat @ 3.3.9
+|-- lvgl @ 8.4.0
+|-- Signals @ 2.0.0
+|-- eez-framework @ 0.0.1
+Building in release mode
+Compiling .pio\build\esp32-s3-viewe\lib09f\Adafruit NeoPixel\Adafruit_NeoPixel.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib09f\Adafruit NeoPixel\Adafruit_Neopixel_RP2.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib09f\Adafruit NeoPixel\esp.c.o
+Compiling .pio\build\esp32-s3-viewe\lib09f\Adafruit NeoPixel\esp8266.c.o
+Compiling .pio\build\esp32-s3-viewe\lib09f\Adafruit NeoPixel\kendyte_k210.c.o
+Compiling .pio\build\esp32-s3-viewe\lib09f\Adafruit NeoPixel\psoc6.c.o
+Compiling .pio\build\esp32-s3-viewe\lib3d5\esp-lib-utils\log\impl\esp_utils_log_impl.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib3d5\esp-lib-utils\memory\esp_utils_mem.c.o
+Compiling .pio\build\esp32-s3-viewe\lib3d5\esp-lib-utils\memory\esp_utils_mem_cxx_global.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib3d5\esp-lib-utils\memory\esp_utils_mem_general.c.o
+Compiling .pio\build\esp32-s3-viewe\lib3d5\esp-lib-utils\thread\esp_utils_thread.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib944\ESP32_IO_Expander\chip\esp_expander_base.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib944\ESP32_IO_Expander\chip\esp_expander_ch422g.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib944\ESP32_IO_Expander\chip\esp_expander_ht8574.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib944\ESP32_IO_Expander\chip\esp_expander_tca95xx_16bit.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib944\ESP32_IO_Expander\chip\esp_expander_tca95xx_8bit.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib944\ESP32_IO_Expander\port\esp_io_expander.c.o
+Compiling .pio\build\esp32-s3-viewe\lib944\ESP32_IO_Expander\port\esp_io_expander_ch422g.c.o
+Compiling .pio\build\esp32-s3-viewe\lib944\ESP32_IO_Expander\port\esp_io_expander_ht8574.c.o
+Compiling .pio\build\esp32-s3-viewe\lib944\ESP32_IO_Expander\port\esp_io_expander_tca9554.c.o
+Compiling .pio\build\esp32-s3-viewe\lib944\ESP32_IO_Expander\port\esp_io_expander_tca95xx_16bit.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\board\esp_panel_board.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\board\esp_panel_board_default_config.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\backlight\esp_panel_backlight.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\backlight\esp_panel_backlight_custom.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\backlight\esp_panel_backlight_factory.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\backlight\esp_panel_backlight_pwm_ledc.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\backlight\esp_panel_backlight_switch_expander.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\backlight\esp_panel_backlight_switch_gpio.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\bus\esp_panel_bus.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\bus\esp_panel_bus_dsi.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\bus\esp_panel_bus_factory.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\bus\esp_panel_bus_i2c.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\bus\esp_panel_bus_qspi.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\bus\esp_panel_bus_rgb.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\bus\esp_panel_bus_spi.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\bus\port\esp_lcd_panel_io_3wire_spi.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\host\esp_panel_host_dsi.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\host\esp_panel_host_i2c.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\host\esp_panel_host_spi.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\io_expander\esp_panel_io_expander_factory.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_axs15231b.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_ek79007.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_ek9716b.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_factory.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_gc9503.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_gc9a01.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_gc9b71.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_hx8399.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_ili9341.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_ili9881c.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_jd9165.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_jd9365.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_nv3022b.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_sh8601.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_spd2010.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_st7262.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_st7701.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_st7703.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_st7789.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_st77903.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_st77916.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_st77922.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\esp_panel_lcd_st7796.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_axs15231b.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_ek79007.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_gc9503.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_gc9a01.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_gc9b71.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_hx8399.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_ili9341.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_ili9881c.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_jd9165.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_jd9365.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_nv3022b.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_sh8601.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_spd2010.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st7701.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st7701_mipi.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st7701_rgb.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st7703.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st7789.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st77903_rgb.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st77916.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st77922.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st77922_general.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st77922_mipi.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st77922_rgb.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st7796.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st7796_general.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\lcd\port\esp_lcd_st7796_mipi.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_axs15231b.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_chsc6540.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_cst816s.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_cst820.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_factory.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_ft5x06.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_gt1151.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_gt911.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_spd2010.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_st1633.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_st7123.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_stmpe610.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_tt21100.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\esp_panel_touch_xpt2046.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch_axs15231b.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch_chsc6540.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch_cst816s.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch_cst820.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch_ft5x06.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch_gt1151.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch_gt911.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch_spd2010.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch_st1633.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch_st7123.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch_stmpe610.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch_tt21100.c.o
+Compiling .pio\build\esp32-s3-viewe\lib075\ESP32_Display_Panel\drivers\touch\port\esp_lcd_touch_xpt2046.c.o
+Compiling .pio\build\esp32-s3-viewe\lib64d\ESP32_Button\Button.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib64d\ESP32_Button\original\button_adc.c.o
+Compiling .pio\build\esp32-s3-viewe\lib64d\ESP32_Button\original\button_gpio.c.o
+Compiling .pio\build\esp32-s3-viewe\lib64d\ESP32_Button\original\button_matrix.c.o
+Compiling .pio\build\esp32-s3-viewe\lib64d\ESP32_Button\original\iot_button.c.o
+Compiling .pio\build\esp32-s3-viewe\libb6d\ESP32_Knob\ESP_Knob.cpp.o
+Compiling .pio\build\esp32-s3-viewe\libb6d\ESP32_Knob\base\iot_knob.c.o
+Compiling .pio\build\esp32-s3-viewe\libe15\FS\FS.cpp.o
+pio : lib/ESP32_Button/src/original/button_adc.c: In function 'button_adc_init':
+In C:\Users\DK8DE\AppData\Local\Temp\ps-script-961af2f1-4b49-4cbe-a7a3-df6cf5f6517b.ps1:96 Zeichen:1
++ pio run -e esp32-s3-viewe 2>&1 | Out-File pio_build.txt -Encoding utf ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (lib/ESP32_Butto...tton_adc_init'::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+lib/ESP32_Button/src/original/button_adc.c:199:13: warning: 'ADC_ATTEN_DB_11' is deprecated [-Wdeprecated-declarations]
+  199 |             .atten = ADC_BUTTON_ATTEN,
+      |             ^
+In file included from C:/Users/DK8DE/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/esp_adc/inc
+lude/esp_adc/adc_oneshot.h:12,
+                 from lib/ESP32_Button/src/original/button_adc.c:13:
+C:/Users/DK8DE/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/hal/include/hal/adc_types.h:52:5:
+ note: declared here
+   52 |     ADC_ATTEN_DB_11 __attribute__((deprecated)) = ADC_ATTEN_DB_12,  ///<This is deprecated, it behaves the 
+same as `ADC_ATTEN_DB_12`
+      |     ^~~~~~~~~~~~~~~
+lib/ESP32_Button/src/original/button_adc.c:204:9: warning: 'ADC_ATTEN_DB_11' is deprecated [-Wdeprecated-declarations]
+  204 |         ret = adc_calibration_init(ADC_BUTTON_ADC_UNIT, ADC_BUTTON_ATTEN, &g_button.adc1_cali_handle);
+      |         ^~~
+C:/Users/DK8DE/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/hal/include/hal/adc_types.h:52:5:
+ note: declared here
+   52 |     ADC_ATTEN_DB_11 __attribute__((deprecated)) = ADC_ATTEN_DB_12,  ///<This is deprecated, it behaves the 
+same as `ADC_ATTEN_DB_12`
+      |     ^~~~~~~~~~~~~~~
+Compiling .pio\build\esp32-s3-viewe\libe15\FS\vfs_api.cpp.o
+Compiling .pio\build\esp32-s3-viewe\libced\FFat\FFat.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_disp.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_event.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_group.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_indev.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_indev_scroll.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_obj.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_obj_class.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_obj_draw.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_obj_pos.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_obj_scroll.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_obj_style.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_obj_style_gen.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_obj_tree.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_refr.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\core\lv_theme.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\arm2d\lv_gpu_arm2d.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\lv_draw.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\lv_draw_arc.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\lv_draw_img.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\lv_draw_label.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\lv_draw_layer.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\lv_draw_line.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\lv_draw_mask.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\lv_draw_rect.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\lv_draw_transform.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\lv_draw_triangle.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\lv_img_buf.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\lv_img_cache.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\lv_img_decoder.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\nxp\pxp\lv_draw_pxp.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\nxp\pxp\lv_draw_pxp_blend.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\nxp\pxp\lv_gpu_nxp_pxp.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\nxp\pxp\lv_gpu_nxp_pxp_osa.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\nxp\vglite\lv_draw_vglite.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\nxp\vglite\lv_draw_vglite_arc.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\nxp\vglite\lv_draw_vglite_blend.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\nxp\vglite\lv_draw_vglite_line.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\nxp\vglite\lv_draw_vglite_rect.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\nxp\vglite\lv_vglite_buf.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\nxp\vglite\lv_vglite_utils.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\renesas\lv_gpu_d2_draw_label.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\renesas\lv_gpu_d2_ra6m3.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl_arc.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl_bg.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl_composite.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl_img.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl_label.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl_layer.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl_line.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl_mask.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl_polygon.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl_rect.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl_stack_blur.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl_texture_cache.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sdl\lv_draw_sdl_utils.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\stm32_dma2d\lv_gpu_stm32_dma2d.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sw\lv_draw_sw.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sw\lv_draw_sw_arc.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sw\lv_draw_sw_blend.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sw\lv_draw_sw_dither.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sw\lv_draw_sw_gradient.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sw\lv_draw_sw_img.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sw\lv_draw_sw_layer.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sw\lv_draw_sw_letter.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sw\lv_draw_sw_line.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sw\lv_draw_sw_polygon.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sw\lv_draw_sw_rect.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\sw\lv_draw_sw_transform.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\draw\swm341_dma2d\lv_gpu_swm341_dma2d.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\layouts\flex\lv_flex.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\layouts\grid\lv_grid.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\bmp\lv_bmp.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\ffmpeg\lv_ffmpeg.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\freetype\lv_freetype.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\fsdrv\lv_fs_fatfs.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\fsdrv\lv_fs_littlefs.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\fsdrv\lv_fs_posix.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\fsdrv\lv_fs_stdio.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\fsdrv\lv_fs_win32.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\gif\gifdec.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\gif\lv_gif.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\png\lodepng.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\png\lv_png.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\qrcode\lv_qrcode.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\qrcode\qrcodegen.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\rlottie\lv_rlottie.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\sjpg\lv_sjpg.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\sjpg\tjpgd.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\libs\tiny_ttf\lv_tiny_ttf.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\lv_extra.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\others\fragment\lv_fragment.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\others\fragment\lv_fragment_manager.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\others\gridnav\lv_gridnav.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\others\ime\lv_ime_pinyin.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\others\imgfont\lv_imgfont.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\others\monkey\lv_monkey.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\others\msg\lv_msg.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\others\snapshot\lv_snapshot.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\themes\basic\lv_theme_basic.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\themes\default\lv_theme_default.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\themes\mono\lv_theme_mono.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\animimg\lv_animimg.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\calendar\lv_calendar.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\calendar\lv_calendar_header_arrow.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\calendar\lv_calendar_header_dropdown.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\chart\lv_chart.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\colorwheel\lv_colorwheel.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\imgbtn\lv_imgbtn.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\keyboard\lv_keyboard.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\led\lv_led.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\list\lv_list.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\menu\lv_menu.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\meter\lv_meter.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\msgbox\lv_msgbox.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\span\lv_span.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\spinbox\lv_spinbox.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\spinner\lv_spinner.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\tabview\lv_tabview.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\tileview\lv_tileview.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\extra\widgets\win\lv_win.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_dejavu_16_persian_hebrew.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_fmt_txt.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_loader.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_10.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_12.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_12_subpx.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_14.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_16.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_18.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_20.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_22.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_24.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_26.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_28.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_28_compressed.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_30.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_32.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_34.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_36.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_38.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_40.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_42.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_44.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_46.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_48.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_montserrat_8.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_simsun_16_cjk.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_unscii_16.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\font\lv_font_unscii_8.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\hal\lv_hal_disp.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\hal\lv_hal_indev.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\hal\lv_hal_tick.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_anim.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_anim_timeline.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_area.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_async.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_bidi.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_color.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_fs.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_gc.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_ll.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_log.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_lru.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_math.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_mem.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_printf.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_style.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_style_gen.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_templ.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_timer.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_tlsf.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_txt.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_txt_ap.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\misc\lv_utils.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_arc.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_bar.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_btn.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_btnmatrix.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_canvas.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_checkbox.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_dropdown.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_img.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_label.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_line.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_objx_templ.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_roller.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_slider.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_switch.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_table.c.o
+Compiling .pio\build\esp32-s3-viewe\lib208\lvgl\widgets\lv_textarea.c.o
+Compiling .pio\build\esp32-s3-viewe\libbcb\Signals\Signals.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\core\action.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\core\alloc.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\core\assets.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\core\debug.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\core\eeprom.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\core\hmi.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\core\memory.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\core\os.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\core\unit.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\core\util.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\core\value.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\animate.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\call_action.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\catch_error.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\compare.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\constant.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\counter.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\delay.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\end.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\error.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\expr_eval.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\input.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\is_true.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\label_in.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\label_out.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\line_chart_widget.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\log.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\loop.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\lvgl.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\lvgl_user_widget.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\mqtt.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\noop.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\on_event.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\output.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\override_style.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\roller_widget.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\select_language.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\set_color_theme.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\set_page_direction.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\set_variable.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\show_keyboard.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\show_keypad.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\show_message_box.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\show_page.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\sort_array.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\start.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\switch.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\test_and_set.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\user_widget.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\components\watch_variable.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\dashboard_api.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\date.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\debugger.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\expression.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\flow.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\hooks.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\lvgl_api.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\operations.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\private.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\queue.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\flow\watch_list.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\fs\simulator\fs.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\fs\stm32\fs.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\action_impl.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\animation.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\app_context.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\data.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\display.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\draw.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\event.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\font.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\geometry.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\gui.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\hooks.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\keypad.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\overlay.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\page.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\thread.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\touch.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\touch_calibration.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\touch_filter.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\update.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widget.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\bar_graph.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\bitmap.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\button.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\button_group.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\canvas.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\containers\app_view.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\containers\container.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\containers\grid.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\containers\list.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\containers\select.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\containers\user_widget.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\display_data.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\drop_down_list.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\gauge.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\input.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\line_chart.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\list_graph.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\multiline_text.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\progress.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\qr_code.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\rectangle.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\roller.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\scroll_bar.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\slider.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\switch.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\text.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\toggle_button.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\up_down.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\gui\widgets\yt_graph.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg2d.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_arc.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_arrowhead.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_bezier_arc.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_bspline.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_color_rgba.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_curves.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_embedded_raster_fonts.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_gsv_text.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_image_filters.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_line_aa_basics.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_line_profile_aa.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_rounded_rect.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_sqrt_tables.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_trans_affine.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_trans_double_path.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_trans_single_path.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_trans_warp_magnifier.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_vcgen_bspline.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_vcgen_contour.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_vcgen_dash.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_vcgen_markers_term.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_vcgen_smooth_poly1.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_vcgen_stroke.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_vpgen_clip_polygon.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_vpgen_clip_polyline.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\agg\agg_vpgen_segmentator.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\libscpi\src\error.c.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\libscpi\src\expression.c.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\libscpi\src\fifo.c.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\libscpi\src\ieee488.c.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\libscpi\src\lexer.c.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\libscpi\src\minimal.c.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\libscpi\src\parser.c.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\libscpi\src\units.c.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\libscpi\src\utils.c.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\lz4\lz4.c.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\qrcodegen\qrcodegen.c.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\libs\sha256\sha256.c.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\platform\simulator\cmsis_os2.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\platform\simulator\display.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\platform\simulator\events.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\platform\simulator\touch.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\platform\stm32\display.cpp.o
+Compiling .pio\build\esp32-s3-viewe\lib10c\eez-framework\eez\platform\stm32\touch.cpp.o
+Compiling .pio\build\esp32-s3-viewe\src\lvgl_v8_port.cpp.o
+Compiling .pio\build\esp32-s3-viewe\src\main.cpp.o
+Compiling .pio\build\esp32-s3-viewe\src\pwm_config.cpp.o
+Compiling .pio\build\esp32-s3-viewe\src\rotor_app.cpp.o
+Compiling .pio\build\esp32-s3-viewe\src\rotor_error_app.cpp.o
+Compiling .pio\build\esp32-s3-viewe\src\rotor_rs485.cpp.o
+Compiling .pio\build\esp32-s3-viewe\src\serial_bridge.cpp.o
+Compiling .pio\build\esp32-s3-viewe\src\signals_ring_app.cpp.o
+Compiling .pio\build\esp32-s3-viewe\src\touch_feedback.cpp.o
+Compiling .pio\build\esp32-s3-viewe\src\ui\images.c.o
+Compiling .pio\build\esp32-s3-viewe\src\ui\screens.c.o
+Compiling .pio\build\esp32-s3-viewe\src\ui\styles.c.o
+Compiling .pio\build\esp32-s3-viewe\src\ui\ui.c.o
+Compiling .pio\build\esp32-s3-viewe\src\ui_input.c.o
+Building .pio\build\esp32-s3-viewe\bootloader.bin
+Generating partitions .pio\build\esp32-s3-viewe\partitions.bin
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\ColorFormat.c.o
+esptool v5.3.0
+Creating ESP32-S3 image...
+Merged 2 ELF sections.
+Successfully created ESP32-S3 image.
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\Esp.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\FirmwareMSC.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\FunctionalInterrupt.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\HEXBuilder.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\HWCDC.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\HardwareSerial.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\HashBuilder.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\IPAddress.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\MD5Builder.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\MacAddress.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\Print.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\Stream.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\StreamString.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\StringUtils.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\Tone.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\USB.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\USBCDC.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\USBMSC.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\WMath.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\WString.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\base64.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\cbuf.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\chip-debug-report.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-adc.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-bt.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-cpu.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-dac.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-gpio.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-hosted.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-i2c-ng.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-i2c-slave.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-i2c.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-ldo.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-ledc.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-log-wrapper.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-matrix.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-misc.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-periman.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-psram.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-rgb-led.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-rmt.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-sigmadelta.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-spi.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-time.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-timer.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-tinyusb.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-touch-ng.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-touch.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\esp32-hal-uart.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\firmware_msc_fat.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\freertos_stats.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\idf_openthread_mpool_wrapper.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\libb64\cdecode.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\libb64\cencode.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\main.cpp.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\stdlib_noniso.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\wiring_pulse.c.o
+Compiling .pio\build\esp32-s3-viewe\FrameworkArduino\wiring_shift.c.o
+Archiving .pio\build\esp32-s3-viewe\libFrameworkArduino.a
+Indexing .pio\build\esp32-s3-viewe\libFrameworkArduino.a
+Linking .pio\build\esp32-s3-viewe\firmware.elf
+                           Memory Type Usage Summary                            
+ÔöîÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö¼ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö¼ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö¼ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö¼ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÉ
+Ôöé Memory            Ôöé              Ôöé          Ôöé                Ôöé               Ôöé
+Ôöé Type/Section      Ôöé Used [bytes] Ôöé Used [%] Ôöé Remain [bytes] Ôöé Total [bytes] Ôöé
+Ôö£ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö╝ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö╝ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö╝ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö╝ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöñ
+Ôöé Flash Data        Ôöé      1124092 Ôöé          Ôöé                Ôöé               Ôöé
+Ôöé    .rodata        Ôöé      1123836 Ôöé          Ôöé                Ôöé               Ôöé
+Ôöé    .appdesc       Ôöé          256 Ôöé          Ôöé                Ôöé               Ôöé
+Ôöé Flash Code        Ôöé       678200 Ôöé          Ôöé                Ôöé               Ôöé
+Ôöé    .text          Ôöé       678200 Ôöé          Ôöé                Ôöé               Ôöé
+Ôöé DIRAM             Ôöé       126073 Ôöé    36.89 Ôöé         215687 Ôöé        341760 Ôöé
+Ôöé    .text          Ôöé        58531 Ôöé    17.13 Ôöé                Ôöé               Ôöé
+Ôöé    .bss           Ôöé        49880 Ôöé     14.6 Ôöé                Ôöé               Ôöé
+Ôöé    .data          Ôöé        17662 Ôöé     5.17 Ôöé                Ôöé               Ôöé
+Ôöé IRAM              Ôöé        16384 Ôöé    100.0 Ôöé              0 Ôöé         16384 Ôöé
+Ôöé    .text          Ôöé        15356 Ôöé    93.73 Ôöé                Ôöé               Ôöé
+Ôöé    .vectors       Ôöé         1028 Ôöé     6.27 Ôöé                Ôöé               Ôöé
+ÔööÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö┤ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö┤ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö┤ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö┤ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÿ
+Total image size: 1894869 bytes (.bin may be padded larger)
+Note: The reported total sizes may be smaller than those in the technical 
+reference manual due to reserved memory and application configuration. The total
+flash size available for the application is not included by default, as it 
+cannot be reliably determined due to the presence of other data like the 
+bootloader, partition table, and application partition size.
+Retrieving maximum program size .pio\build\esp32-s3-viewe\firmware.elf
+Checking size .pio\build\esp32-s3-viewe\firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [==        ]  20.6% (used 67544 bytes from 327680 bytes)
+Flash: [======    ]  60.2% (used 1894613 bytes from 3145728 bytes)
+Building .pio\build\esp32-s3-viewe\firmware.bin
+esptool v5.3.0
+Creating ESP32-S3 image...
+Merged 2 ELF sections.
+Successfully created ESP32-S3 image.
+Creating binary "firmware.factory.bin" with:
+    Offset   | File
+ -  0x0000   | bootloader.bin
+ -  0x8000   | partitions.bin
+ -  0xe000   | boot_app0.bin
+ -  0x10000  | firmware.bin
+Successfully created combined binary image.
+======================== [SUCCESS] Took 162.02 seconds ========================

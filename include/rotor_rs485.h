@@ -64,6 +64,12 @@ void rotor_rs485_loop(void);
  */
 bool rotor_rs485_is_foreign_pc_listen_mode(void);
 
+/**
+ * Boot-/Link-Zustand zurücksetzen und Watchdog neu armieren (z. B. nach SETCONREMOTE
+ * oder USB-Reconnect im Remote-USB-Modus).
+ */
+void rotor_rs485_relink(void);
+
 void rotor_rs485_set_ref_callback(rotor_rs485_ref_cb_t cb);
 void rotor_rs485_set_position_callback(rotor_rs485_pos_cb_t cb);
 void rotor_rs485_set_target_callback(rotor_rs485_target_cb_t cb);

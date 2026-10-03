@@ -26,6 +26,8 @@ static uint16_t s_touch_beep_freq_hz = 1100;
 static uint8_t s_touch_beep_vol = 14;
 /** GETCONANO/SETCONANO — Wetter-Tab (1) / aus (0); Standard 0 = kein Wetter vorgegeben */
 static uint8_t s_anemometer = 0;
+/** GETCONREMOTE/SETCONREMOTE — Controller Remote USB (1) / normaler RS485 (0) */
+static uint8_t s_remote_usb = 0;
 /** GETCONDELTA/SETCONDELTA — Zehntel pro Encoder-Raste: 1 = 0,1° oder 10 = 1°; Standard 10 */
 static uint8_t s_encoder_delta_tenths = 10;
 /** GETCONCHA/SETCONCHA — Antennenwechsel: 1 = taget behalten, 0 = taget = Ist-Anzeige */
@@ -92,6 +94,7 @@ void pwm_config_load_defaults(void)
     s_touch_beep_freq_hz = 1100;
     s_touch_beep_vol = 14;
     s_anemometer = 0;
+    s_remote_usb = 0;
     s_encoder_delta_tenths = 10;
     s_concha = 0;
     s_led_ring_brightness_pct = 100;
@@ -119,6 +122,7 @@ static size_t render_config_json(char *out, size_t sz)
              "  \"confrq\": %u,\n"
              "  \"lsl\": %u,\n"
              "  \"anemometer\": %u,\n"
+             "  \"remote_usb\": %u,\n"
              "  \"encoder_delta\": %u,\n"
              "  \"concha\": %u,\n"
              "  \"conledp\": %u\n"
@@ -126,8 +130,8 @@ static size_t render_config_json(char *out, size_t sz)
              (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_pwm_ui_fast, (unsigned)s_master_id,
              (unsigned)s_rotor_id, (unsigned)s_rotor_el_id,
              (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol,
-             (unsigned)s_anemometer, (unsigned)s_encoder_delta_tenths, (unsigned)s_concha,
-             (unsigned)s_led_ring_brightness_pct);
+             (unsigned)s_anemometer, (unsigned)s_remote_usb, (unsigned)s_encoder_delta_tenths,
+             (unsigned)s_concha, (unsigned)s_led_ring_brightness_pct);
     if (n < 0 || (size_t)n >= sz) {
         out[0] = '\0';
         return 0;
@@ -188,6 +192,10 @@ void pwm_config_load(void)
     int ano = parse_int_after_key(buf, "anemometer");
     if (ano == 0 || ano == 1) {
         s_anemometer = (uint8_t)ano;
+    }
+    int rem = parse_int_after_key(buf, "remote_usb");
+    if (rem == 0 || rem == 1) {
+        s_remote_usb = (uint8_t)rem;
     }
     int ed = parse_int_after_key(buf, "encoder_delta");
     if (ed == 1 || ed == 10) {
@@ -490,6 +498,23 @@ void pwm_config_set_anemometer(uint8_t on_0_or_1)
 {
     if (on_0_or_1 <= 1u) {
         s_anemometer = on_0_or_1;
+    }
+}
+
+uint8_t pwm_config_get_remote_usb(void)
+{
+    return s_remote_usb;
+}
+
+void pwm_config_set_remote_usb(uint8_t on_0_or_1)
+{
+    if (on_0_or_1 <= 1u) {
+        if (s_remote_usb != on_0_or_1) {
+            /* Nächsten Save erzwingen — sonst bleibt remote_usb=0 in FFat und Soft-10
+             * kommt nach jedem Kaltstart ohne PC-Software. */
+            s_last_written_valid = false;
+        }
+        s_remote_usb = on_0_or_1;
     }
 }
 

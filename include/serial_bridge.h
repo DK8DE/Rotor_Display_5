@@ -27,6 +27,19 @@ void set_mode(BridgeMode mode);
 BridgeMode get_mode();
 
 /**
+ * Controller Remote USB: kein UART-TX zum RS485; Frames nur USB↔Parser.
+ * Initialwert aus pwm_config; SETCONREMOTE aktualisiert zur Laufzeit.
+ */
+void set_remote_usb(bool on);
+bool remote_usb_active();
+/** True wenn Remote-USB aktiv und PC-Link kürzlich Bytes/Frames geliefert hat. */
+bool remote_usb_pc_seen();
+/** Remote-USB: PC-Session noch „online“ (vor Link-Down), auch bei kurzer Sendepause. */
+bool remote_usb_link_session();
+/** Remote-USB aktiv und kein PC-Link — Display wartet, kein RS485/Boot. */
+bool remote_usb_waiting_for_pc();
+
+/**
  * Gemeinsamer Mutex für direkten Zugriff auf Serial2 (RS485).
  * Normaler Versand soll über hw_send()/hw_send_priority() laufen.
  */

@@ -240,6 +240,8 @@ static bool s_pending_el_limits_changed = false;
 static bool s_el_rotor_type_known = false;
 /** config.json: pwm_config_save() nur im Haupt-loop, nicht im RS485-/USB-Parser (Proxy/FFat/WDT). */
 static bool s_pending_pwm_config_save = false;
+/** true: nächstes idle_tasks speichert ohne Debounce (SETCONREMOTE u. ä.). */
+static bool s_force_pwm_config_save = false;
 /** Debounce: Speichern erst nach Ruhe / spätestens nach Max-Wartezeit. */
 static uint32_t s_pwm_config_save_first_ms = 0;
 static uint32_t s_pwm_config_save_last_ms = 0;
@@ -278,6 +280,7 @@ static inline void schedule_pwm_config_save_from_bus_now(void)
         s_pwm_config_save_first_ms = now;
     }
     s_pwm_config_save_last_ms = now - ROTOR_PWM_CONFIG_SAVE_DEBOUNCE_MS;
+    s_force_pwm_config_save = true;
 }
 
 /** SETASELECT per Bus/USB: Flash/LVGL nur in rotor_rs485_idle_tasks (nicht Parser-/Bridge-Task). */
@@ -673,14 +676,16 @@ void rotor_rs485_idle_tasks(void)
     flush_deferred_position_ui();
     flush_deferred_ref_ui();
     flush_deferred_target_ui();
-    if (s_pending_pwm_config_save) {
+    if (s_pending_pwm_config_save || s_force_pwm_config_save) {
         const uint32_t now = millis();
         const bool quiet =
             (uint32_t)(now - s_pwm_config_save_last_ms) >= ROTOR_PWM_CONFIG_SAVE_DEBOUNCE_MS;
         const bool max_wait =
+            s_pending_pwm_config_save &&
             (uint32_t)(now - s_pwm_config_save_first_ms) >= ROTOR_PWM_CONFIG_SAVE_MAX_WAIT_MS;
-        if (quiet || max_wait) {
+        if (s_force_pwm_config_save || quiet || max_wait) {
             s_pending_pwm_config_save = false;
+            s_force_pwm_config_save = false;
             s_pwm_config_save_first_ms = 0;
             s_pwm_config_save_last_ms = 0;
             pwm_config_save();
@@ -768,6 +773,10 @@ bool rotor_rs485_boot_read_in_progress(void)
 
 bool rotor_rs485_is_foreign_pc_listen_mode(void)
 {
+    /* Remote USB: Controller ist Soft-Master über USB — kein Mitläufer. */
+    if (serial_bridge::remote_usb_active()) {
+        return false;
+    }
     /* USB-Bridge (PC steuert): lokale Hintergrund-GETs drosseln, auch wenn PC dieselbe Master-ID nutzt. */
     if (serial_bridge::get_mode() == serial_bridge::BridgeMode::PcProxyMaster) {
         return true;
@@ -781,6 +790,10 @@ bool rotor_rs485_is_foreign_pc_listen_mode(void)
 
 static bool foreign_master_target_active(void)
 {
+    /* Remote USB: SETPOSCC/DG immer an den echten Slave (über USB-Proxy), nie an PC-Master-ID. */
+    if (serial_bridge::remote_usb_active()) {
+        return false;
+    }
     if (s_last_foreign_master_to_slave_ms == 0) {
         return false;
     }
@@ -834,6 +847,10 @@ static void clear_remote_other_motion(void)
 
 static void note_foreign_master_to_rotor(unsigned src)
 {
+    /* Remote USB: gespiegelte PC-Polls sind der Soll-Pfad — kein Mitläufer-Timer. */
+    if (serial_bridge::remote_usb_active()) {
+        return;
+    }
     /* Während AZ-Param-Boot (Versatz/Dipol/Winkel/Namen/ASELECT) kein Mitläufer —
      * sonst kollidieren Fremd-GETPOSDG mit unseren Boot-GETs und die Kette dauert ewig /
      * bricht ab → LED-Ring ohne Dipol/Öffnungswinkel. */
@@ -1363,6 +1380,9 @@ bool rotor_rs485_goto_degrees(float deg)
     s_pos_grace_end_ms = 0;
     s_next_pos_poll_ms = 0;
     s_resume_poll_pos_after_conn_loss = false;
+    /* Soft-Master: eigenes SETPOSDG beendet den Mitläufer-Deadman sofort, damit GETPOSDG
+     * nach ACK nicht ~3 s blockiert bleibt. */
+    s_last_foreign_master_to_slave_ms = 0;
     send_request("SETPOSDG", p, Pending::SetPosDg);
     /* Callback: Bus-Ist/Soll (normalisiert), UI rechnet Antennenversatz um */
     notify_target(n);
@@ -1379,8 +1399,11 @@ static void try_flush_setposcc(void)
     char p[64];
     // SETPOSCC-Payload: "<deg>;<rotor_id>" damit der fremde Master den richtigen Rotor zuordnen kann.
     snprintf(p, sizeof(p), "%s;%u", deg_buf, (unsigned)s_slave_id);
-    /* Mitlaeufer-/Slave-Modus: SETPOSCC ist fuer die Software/Master-ID bestimmt, nicht fuer den Rotor. */
-    const uint8_t dst = foreign_master_target_active() ? s_foreign_master_src_id : s_slave_id;
+    /* Mitläufer: SETPOSCC an PC-Master. Remote USB / lokaler Master: an Rotor-Slave (Proxy). */
+    uint8_t dst = s_slave_id;
+    if (!serial_bridge::remote_usb_active() && foreign_master_target_active()) {
+        dst = s_foreign_master_src_id;
+    }
     send_line_to(dst, "SETPOSCC", p);
     s_setposcc_queued = false;
     s_last_setposcc_tx_ms = millis();
@@ -2200,6 +2223,40 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
         return true;
     }
 
+    if (strstr(line, ":GETCONREMOTE:")) {
+        if (!CFG_TRY_TAG(":GETCONREMOTE:")) {
+            config_reply_nak(src, "NAK_GETCONREMOTE", 2);
+            return true;
+        }
+        config_reply_ack_u8(src, "ACK_GETCONREMOTE", pwm_config_get_remote_usb());
+        return true;
+    }
+
+    if (strstr(line, ":SETCONREMOTE:")) {
+        if (!CFG_TRY_TAG(":SETCONREMOTE:")) {
+            config_reply_nak(src, "NAK_SETCONREMOTE", 2);
+            return true;
+        }
+        unsigned v = 0;
+        if (sscanf(par, "%u", &v) != 1 || v > 1u) {
+            config_reply_nak(src, "NAK_SETCONREMOTE", 1);
+            return true;
+        }
+        const uint8_t prev = pwm_config_get_remote_usb();
+        pwm_config_set_remote_usb((uint8_t)v);
+        /* Sofort speichern — sonst geht remote_usb bei Reset/Flash verloren. */
+        schedule_pwm_config_save_from_bus_now();
+        s_pending_config_changed_from_bus = true;
+        /* ACK immer noch auf dem bisherigen Transport (USB oder RS485), danach umschalten.
+         * Sonst: SETCONREMOTE:1 per Bus → ACK nur noch USB (PC hört Bus) / umgekehrt. */
+        config_reply_ack_u8(src, "ACK_SETCONREMOTE", (uint8_t)v);
+        serial_bridge::set_remote_usb(v != 0u);
+        if (prev != (uint8_t)v) {
+            rotor_rs485_relink();
+        }
+        return true;
+    }
+
     if (strstr(line, ":GETCONDELTA:")) {
         if (!CFG_TRY_TAG(":GETCONDELTA:")) {
             config_reply_nak(src, "NAK_GETCONDELTA", 2);
@@ -2787,9 +2844,16 @@ static void on_ack_timeout()
         s_boot_test_timeout_count++;
         if (s_boot_test_timeout_count >= 3) {
             clear_pending();
-            s_boot_test_done = true;
-            rotor_error_app_set_error_code(10);
-            stop_fault_motion_polling();
+            /* Remote USB: nie Soft-10 — Watchdog nur im RS485-Modus. */
+            if (!serial_bridge::remote_usb_active() && pwm_config_get_remote_usb() == 0u) {
+                s_boot_test_done = true;
+                rotor_error_app_set_error_code(10);
+                stop_fault_motion_polling();
+            } else {
+                /* Remote: TEST-Fail ohne Soft-10 — auf PC warten, Boot später erneut. */
+                s_boot_test_done = false;
+                s_boot_test_timeout_count = 0;
+            }
         } else {
             send_request("TEST", "0", Pending::Test);
         }
@@ -2817,6 +2881,9 @@ static bool parse_ack_setposdg_result(const char *line)
     if (for_us && s_pending == Pending::SetPosDg) {
         clear_pending();
         s_hw_snap_retarget_active = false;
+        /* Soft-Master: nach eigenem SETPOSDG sofort GETPOSDG, auch wenn kurz zuvor
+         * noch Fremd-Master-Aktivität den Mitläufer-Timer gesetzt hatte. */
+        s_last_foreign_master_to_slave_ms = 0;
     }
     if (for_us && s_poll_pos && !rotor_rs485_is_foreign_pc_listen_mode()) {
         send_request("GETPOSDG", "0", Pending::GetPosDg);
@@ -4297,10 +4364,59 @@ void rotor_rs485_init(void)
     s_target_ui_deferred = false;
 }
 
+void rotor_rs485_relink(void)
+{
+    clear_pending();
+    s_err10_recovery_getref_pending = false;
+    s_resume_poll_pos_after_conn_loss = false;
+    s_resume_remote_setpos_after_conn_loss = false;
+    s_boot_test_done = false;
+    s_boot_test_timeout_count = 0;
+    s_boot_done = false;
+    s_boot_phase = 0;
+    s_startup_err_known = false;
+    s_ref_state_known = false;
+    s_boot_earliest_ms = millis() + 200u;
+    s_next_periodic_getref_ms = millis() + ROTOR_PERIODIC_GETREF_MS;
+    s_antenna_boot_pending = true;
+    s_antenna_boot_phase = 0;
+    s_aselect_boot_pending = (pwm_config_get_rotor_id() != 0u);
+    s_boot_param_timeout_count = 0;
+    s_angle_boot_pending = false;
+    s_angle_boot_phase = 0;
+    s_enc_boot_pending = false;
+    s_enc_boot_phase = 0;
+    s_name_boot_pending = false;
+    s_name_boot_phase = 0;
+    s_status_boot_pending = false;
+    s_status_boot_phase = 0;
+    s_el_status_boot_pending = false;
+    s_el_status_boot_phase = 0;
+    s_el_rotor_type_known = false;
+    s_poll_pos = false;
+    s_poll_ref = false;
+    s_request_pos_after_homing = false;
+    s_last_foreign_master_to_slave_ms = 0;
+    s_foreign_master_src_id = 0;
+    if (rotor_error_app_get_error_code() == 10) {
+        rotor_error_app_set_error_code(0);
+    }
+    s_have_slave_rx_ever = false;
+    s_last_slave_rx_ms = 0;
+    s_conn_watch_start_ms = 0;
+    rotor_rs485_arm_conn_watchdog();
+    s_conn_watch_start_ms = millis();
+}
+
 /** Erstes Paket nach Einschalten: TEST (Ping), 3 Versuche ohne ACK → Fehler 10 */
 static void try_boot_test(void)
 {
     if (s_boot_test_done) {
+        return;
+    }
+    /* Remote USB: kein Boot-TEST ohne aktuelle PC-Software (sonst Soft-10-Irrweg). */
+    if ((serial_bridge::remote_usb_active() || pwm_config_get_remote_usb() != 0u) &&
+        !serial_bridge::remote_usb_pc_seen()) {
         return;
     }
     const int e = rotor_error_app_get_error_code();
@@ -4752,6 +4868,25 @@ static void try_axis_switch_getref(void)
 
 void rotor_rs485_loop(void)
 {
+    /* Remote-USB (Config oder Bridge): Soft-10 aus. Ohne PC-Frames kein Boot/Polling. */
+    const bool remote =
+        serial_bridge::remote_usb_active() || (pwm_config_get_remote_usb() != 0u);
+    if (remote) {
+        if (!serial_bridge::remote_usb_active()) {
+            serial_bridge::set_remote_usb(true);
+        }
+        if (!serial_bridge::remote_usb_pc_seen()) {
+            const bool homing_busy =
+                rotor_rs485_is_homing() || s_poll_ref || s_request_pos_after_homing;
+            if (!(homing_busy && serial_bridge::remote_usb_link_session())) {
+                if (s_pending != Pending::None) {
+                    clear_pending();
+                }
+                return;
+            }
+        }
+    }
+
     const int err = rotor_error_app_get_error_code();
     /* Harte Fehler inkl. Rotor-ERR:10: kein Polling — nur lokaler Watchdog-10: GETREF-Recovery */
     if (rotor_error_app_is_fault_locked()) {
@@ -4772,7 +4907,9 @@ void rotor_rs485_loop(void)
         ((uint32_t)(now_wd - s_last_setposcc_tx_ms) < ROTOR_SETPOSCC_WATCHDOG_GRACE_MS);
     if (err != 10 && s_boot_test_done && !(s_poll_ref || s_request_pos_after_homing) &&
         !s_el_status_boot_pending && !setposcc_preview_recent &&
-        !rotor_app_is_ui_preview_active()) {
+        !rotor_app_is_ui_preview_active() &&
+        !serial_bridge::remote_usb_active() &&
+        pwm_config_get_remote_usb() == 0u) {
         const uint32_t now = now_wd;
         uint32_t conn_timeout_ms = ROTOR_CONN_LOST_TIMEOUT_MS;
         if (s_pending == Pending::SetPosDg) {

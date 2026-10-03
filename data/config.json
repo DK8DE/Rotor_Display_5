@@ -8,6 +8,7 @@
   "confrq": 1100,
   "lsl": 14,
   "anemometer": 0,
+  "remote_usb": 1,
   "encoder_delta": 1,
   "concha": 0,
   "conledp": 100

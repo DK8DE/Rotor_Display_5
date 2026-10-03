@@ -279,15 +279,17 @@ void setup()
                   FIRMWARE_APP_VERSION,
                   FIRMWARE_APP_DATE,
                   FIRMWARE_APP_COPYRIGHT);
-    serial_bridge::begin();
 
-    /* FFat vor Signals-Boot: pwm_config (conledp u. a.) liegt auf /config.json */
+    /* Config vor UART-Bridge: sonst startet begin() mit remote_usb=0 und öffnet RS485-TX. */
     if (!FFat.begin(true, "/ffat", 10, "ffat")) {
         Serial.println("FFat mount failed — Bilder unter /ffat/img/ sind nicht erreichbar");
     } else {
         Serial.printf("FFat OK, %.1f KB free\n", FFat.freeBytes() / 1024.0f);
     }
     pwm_config_load();
+    Serial.printf("remote_usb=%u\n", (unsigned)pwm_config_get_remote_usb());
+    serial_bridge::begin();
+    serial_bridge::set_remote_usb(pwm_config_get_remote_usb() != 0u);
 
     Serial.println("Signals boot (NeoPixel GPIO39, Speaker GPIO40) …");
     signals_start_boot_welcome_async();

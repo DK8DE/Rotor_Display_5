@@ -93,6 +93,13 @@ void pwm_config_set_touch_beep_vol(uint8_t vol);
 uint8_t pwm_config_get_anemometer(void);
 void pwm_config_set_anemometer(uint8_t on_0_or_1);
 
+/**
+ * Controller Remote USB (GETCONREMOTE/SETCONREMOTE, JSON remote_usb):
+ * 1 = kein RS485-TX zum Rotor, alles über USB zur PC-Software; 0 = normaler Bus-Betrieb.
+ */
+uint8_t pwm_config_get_remote_usb(void);
+void pwm_config_set_remote_usb(uint8_t on_0_or_1);
+
 /** Encoder-Schritt in Zehntelgrad: 1 = 0,1°/Raste, 10 = 1°/Raste (GETCONDELTA/SETCONDELTA) */
 uint8_t pwm_config_get_encoder_delta_tenths(void);
 void pwm_config_set_encoder_delta_tenths(uint8_t tenths_1_or_10);
