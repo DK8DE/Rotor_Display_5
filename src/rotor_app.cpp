@@ -19,6 +19,7 @@
 #include "pwm_config.h"
 #include "rotor_error_app.h"
 #include "rotor_rs485.h"
+#include "serial_bridge.h"
 #include "touch_feedback.h"
 #include "ui/screens.h"
 
@@ -88,6 +89,7 @@ static AxisCache s_axis_cache[2];
 static lv_obj_t *s_arc_target_marker = nullptr;
 static int s_arc_target_int_cached = -32768;
 static bool s_arc_target_visible = false;
+static uint32_t s_arc_target_knob_color = 0xff0000u;
 
 static bool axis_is_el(void)
 {
@@ -131,31 +133,64 @@ static bool s_id_field_programmatic_text = false;
 static uint8_t s_pwm_deferred = 255;
 /** Nach Start: einmal Fast-PWM aus config (SETPWM) */
 static bool s_pwm_boot_send_pending = true;
-/** UI: Fast-Taste aktiv (sonst Slow) — für Config-Sync vom Bus */
-/** Standard: Fast (wie Boot-SETPWM); Slow nur nach Tipp auf „Slow“. */
+/** UI: Fast aktiv (sonst Slow) — für Config-Sync vom Bus */
+/** Standard: Fast (wie Boot-SETPWM); Slow nur nach Toggle. */
 static bool s_pwm_ui_is_fast = true;
 
-static void pwm_style_slow_fast(bool fast_active)
+static const char *link_mode_label(uint8_t mode)
+{
+    switch (mode) {
+    case 1:
+        return "PC-USB";
+    case 2:
+        return "WEB";
+    default:
+        return "RS485";
+    }
+}
+
+/** Linke Taste: Link-Modus; rechte Taste: Fast/Slow. */
+static void apply_link_pwm_button_styles(void)
 {
     const lv_color_t c_on = lv_color_hex(0x087321);
     const lv_color_t c_off = lv_color_hex(0x2196f3);
-    const lv_color_t c_txt_on_green = lv_color_hex(0xFFFFFF);
-    const lv_color_t c_txt_on_blue = lv_color_hex(0x000000);
+    const lv_color_t c_mode = lv_color_hex(0x6a1b9a);
+    const lv_color_t c_txt_white = lv_color_hex(0xFFFFFF);
+    const lv_color_t c_txt_black = lv_color_hex(0x000000);
+    const uint8_t lm = pwm_config_get_link_mode();
+
     if (objects.slow) {
-        lv_obj_set_style_bg_color(objects.slow, fast_active ? c_off : c_on, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(objects.slow, c_mode, LV_PART_MAIN);
+    }
+    if (objects.label__slow) {
+        lv_label_set_text(objects.label__slow, link_mode_label(lm));
+        lv_obj_set_style_text_color(objects.label__slow, c_txt_white, LV_PART_MAIN);
+        /* PC-USB etwas kleiner, sonst Clip */
+        lv_obj_set_style_text_font(objects.label__slow,
+                                   (lm == 1u) ? &lv_font_montserrat_20 : &lv_font_montserrat_24,
+                                   LV_PART_MAIN);
     }
     if (objects.fast) {
-        lv_obj_set_style_bg_color(objects.fast, fast_active ? c_on : c_off, LV_PART_MAIN);
-    }
-    /* Grün aktiv → weiße Schrift; blau inaktiv → schwarz */
-    if (objects.label__slow) {
-        lv_obj_set_style_text_color(objects.label__slow, fast_active ? c_txt_on_blue : c_txt_on_green,
-                                    LV_PART_MAIN);
+        lv_obj_set_style_bg_color(objects.fast, s_pwm_ui_is_fast ? c_on : c_off, LV_PART_MAIN);
     }
     if (objects.label_fast) {
-        lv_obj_set_style_text_color(objects.label_fast, fast_active ? c_txt_on_green : c_txt_on_blue,
-                                    LV_PART_MAIN);
+        lv_label_set_text(objects.label_fast, s_pwm_ui_is_fast ? "Fast" : "Slow");
+        lv_obj_set_style_text_color(objects.label_fast,
+                                    s_pwm_ui_is_fast ? c_txt_white : c_txt_black, LV_PART_MAIN);
     }
+}
+
+static void apply_link_mode_runtime(uint8_t mode, bool relink_if_remote_changed)
+{
+    const uint8_t prev_remote = pwm_config_get_remote_usb();
+    pwm_config_set_link_mode(mode);
+    pwm_config_save();
+    const uint8_t rem = pwm_config_get_remote_usb();
+    serial_bridge::set_remote_usb(rem != 0u);
+    if (relink_if_remote_changed && prev_remote != rem) {
+        rotor_rs485_relink();
+    }
+    apply_link_pwm_button_styles();
 }
 
 static void on_slow_btn(lv_event_t *e)
@@ -167,14 +202,8 @@ static void on_slow_btn(lv_event_t *e)
         return;
     }
     touch_feedback_button_click();
-    s_pwm_ui_is_fast = false;
-    pwm_config_set_pwm_ui_fast(0);
-    pwm_config_save();
-    pwm_style_slow_fast(false);
-    const uint8_t p = pwm_config_get_slow();
-    if (!rotor_rs485_send_set_pwm_limit(p)) {
-        s_pwm_deferred = p;
-    }
+    const uint8_t next = (uint8_t)((pwm_config_get_link_mode() + 1u) % 3u);
+    apply_link_mode_runtime(next, true);
 }
 
 static void on_fast_btn(lv_event_t *e)
@@ -186,11 +215,11 @@ static void on_fast_btn(lv_event_t *e)
         return;
     }
     touch_feedback_button_click();
-    s_pwm_ui_is_fast = true;
-    pwm_config_set_pwm_ui_fast(1);
+    s_pwm_ui_is_fast = !s_pwm_ui_is_fast;
+    pwm_config_set_pwm_ui_fast(s_pwm_ui_is_fast ? 1u : 0u);
     pwm_config_save();
-    pwm_style_slow_fast(true);
-    const uint8_t p = pwm_config_get_fast();
+    apply_link_pwm_button_styles();
+    const uint8_t p = s_pwm_ui_is_fast ? pwm_config_get_fast() : pwm_config_get_slow();
     if (!rotor_rs485_send_set_pwm_limit(p)) {
         s_pwm_deferred = p;
     }
@@ -475,6 +504,11 @@ static bool id_field_try_commit_text(lv_obj_t *ta, uint8_t kind)
     if (!id_field_parse_ta_id(ta, &nv, min_id)) {
         return false;
     }
+    /* Mindestens eine Achse muss aktiv bleiben. */
+    if (nv == 0u && ((kind == 0 && pwm_config_get_rotor_el_id() == 0u) ||
+                     (kind == 1 && pwm_config_get_rotor_id() == 0u))) {
+        return false;
+    }
     uint8_t cur = 0;
     if (kind == 0) {
         cur = pwm_config_get_rotor_id();
@@ -510,7 +544,7 @@ static bool id_field_try_commit_text(lv_obj_t *ta, uint8_t kind)
 static uint8_t id_field_display_or_saved_config(lv_obj_t *ta, uint8_t kind)
 {
     uint8_t v = 0;
-    const uint8_t min_id = (kind == 1) ? 0u : 1u;
+    const uint8_t min_id = (kind == 2) ? 1u : 0u;
     if (id_field_parse_ta_id(ta, &v, min_id)) {
         return v;
     }
@@ -557,7 +591,9 @@ extern "C" bool rotor_app_commit_id_field_on_hw_click(void)
         return false;
     }
     if (!id_field_try_commit_text(ta, kind)) {
-        id_fields_set_text(ta, id_field_display_or_saved_config(ta, kind));
+        id_fields_set_text(ta, (kind == 0)   ? pwm_config_get_rotor_id()
+                               : (kind == 1) ? pwm_config_get_rotor_el_id()
+                                             : pwm_config_get_master_id());
     }
     bool need_getref = false;
     if (s_pending_force_axis_az_ui || s_pending_force_axis_el_ui) {
@@ -619,11 +655,14 @@ static void on_id_field_event(lv_event_t *e)
 
 extern "C" void rotor_app_config_changed_from_bus(void)
 {
+    /* Nur UI/IDs syncen — kein SETPWM. Sonst setzt jeder SETCON* (Profil-Push,
+     * Antennennamen, …) die Laufzeit-PWM auf Slow/Fast zurück (Slider springt
+     * oft auf den unteren Wert / MINPWM). SETPWM nur bei Slow/Fast-Taste und Boot. */
     lvgl_port_lock(-1);
     antenna_apply_labels_from_config();
     antenna_apply_style(pwm_config_get_last_antenna());
     s_pwm_ui_is_fast = pwm_config_get_pwm_ui_fast() != 0;
-    pwm_style_slow_fast(s_pwm_ui_is_fast);
+    apply_link_pwm_button_styles();
     rotor_rs485_set_master_id(pwm_config_get_master_id());
     const bool axis_switched = apply_axis_fallback_for_zero_id();
     if (axis_switched) {
@@ -634,10 +673,6 @@ extern "C" void rotor_app_config_changed_from_bus(void)
     id_fields_sync_textareas_from_config();
     apply_anemometer_weather_tab_visibility();
     encoder_delta_apply_button_label();
-    const uint8_t p = s_pwm_ui_is_fast ? pwm_config_get_fast() : pwm_config_get_slow();
-    if (!rotor_rs485_send_set_pwm_limit(p)) {
-        s_pwm_deferred = p;
-    }
     lvgl_port_unlock();
     if (axis_switched) {
         rotor_rs485_send_getref();
@@ -662,6 +697,17 @@ static int wrap_tenths_deg(int t)
         return t;
     }
     const int span_t = static_cast<int>(std::lround(static_cast<double>(axis_span_deg()) * 10.0));
+    if (span_t > 3605) {
+        /* Erweiterter Bereich: in 360°-Schritten falten (gleiche Richtung, nächste Lage im Bereich) —
+         * 720,1° → 360,1° statt 0,1° (sonst zwei Runden zurück); −0,1° → 359,9° statt 719,9°. */
+        while (t > span_t) {
+            t -= 3600;
+        }
+        while (t < 0) {
+            t += 3600;
+        }
+        return t;
+    }
     const int mod = (span_t > 0) ? span_t : 3600;
     t %= mod;
     if (t < 0) {
@@ -770,16 +816,20 @@ static float norm360_add(float a)
     return x;
 }
 
-/** Addieren im wirksamen Fahrbereich (360 oder Typ-3-Span). */
+/** Addieren im wirksamen Fahrbereich (360 oder GETMAXDG-Span). Bei Span > 360 in 360°-Schritten
+ * falten — fmod(span) würde die Himmelsrichtung verfälschen (430 mod 420 = 10 statt 70). */
 static float norm_span_add(float a)
 {
     const float span = pwm_config_get_axis_span_deg();
     if (span <= 360.5f) {
         return norm360_add(a);
     }
-    float x = fmodf(a, span);
-    if (x < 0.0f) {
-        x += span;
+    float x = a;
+    while (x > span) {
+        x -= 360.0f;
+    }
+    while (x < 0.0f) {
+        x += 360.0f;
     }
     return x;
 }
@@ -989,8 +1039,17 @@ static float arc_value_to_bus_shortest(int v, float current_bus)
     return best;
 }
 
+/** Knauf-Farbe für Ist- und Soll-Knauf: Fahrbereich > 360° → grün in der 1. Umdrehung (≤360°),
+ * rot darüber; bei 360°-Bereich und EL immer rot. bus_mech_deg = mechanische Lage (ohne Dipol-+180°). */
+static uint32_t arc_knob_color_for_bus(float bus_mech_deg)
+{
+    if (!axis_is_el() && pwm_config_get_axis_span_deg() > 360.5f) {
+        return (bus_mech_deg > 360.0f) ? 0xff0000u : 0x43b302u;
+    }
+    return 0xff0000u;
+}
+
 /** Arc: mechanische Lage; bei Dipol-Rückkeule Arc-Wert +180° (logische Strahlrichtung am Zeiger).
- * Knauf-Farbe: Typ 3 → grün in der 1. Umdrehung (≤360°), rot darüber; sonst immer rot.
  * EL: EEZ-Arc grad_acc_el (Geometrie/Mode unangetastet). */
 static void grad_acc_sync_bus(float bus_mech_deg, int ant_1_to_3, bool dipole_back_lobe)
 {
@@ -1010,13 +1069,7 @@ static void grad_acc_sync_bus(float bus_mech_deg, int ant_1_to_3, bool dipole_ba
     if (!axis_is_el()) {
         lv_arc_set_rotation(arc, grad_acc_rotation_from_antoff(ant_1_to_3));
     }
-    {
-        uint32_t knob = 0xff0000u;
-        if (!axis_is_el() && pwm_config_get_enc_type() == 3u) {
-            knob = (bus_mech_deg > 360.0f) ? 0xff0000u : 0x43b302u;
-        }
-        lv_obj_set_style_bg_color(arc, lv_color_hex(knob), LV_PART_KNOB);
-    }
+    lv_obj_set_style_bg_color(arc, lv_color_hex(arc_knob_color_for_bus(bus_mech_deg)), LV_PART_KNOB);
     s_arc_updating = false;
 }
 
@@ -1373,6 +1426,11 @@ static void arc_target_marker_refresh(void)
         lv_arc_set_value(s_arc_target_marker, v);
         s_arc_target_int_cached = v;
     }
+    const uint32_t knob = arc_knob_color_for_bus(r.bus_cmd);
+    if (knob != s_arc_target_knob_color) {
+        lv_obj_set_style_bg_color(s_arc_target_marker, lv_color_hex(knob), LV_PART_KNOB);
+        s_arc_target_knob_color = knob;
+    }
     if (!s_arc_target_visible) {
         lv_obj_clear_flag(s_arc_target_marker, LV_OBJ_FLAG_HIDDEN);
         s_arc_target_visible = true;
@@ -1415,7 +1473,7 @@ static void fmt_taget_from_display_deg(char *buf, size_t n, float deg)
     /* Bei Span 360: Homing-Endlage 360,0 anzeigen (wrap_tenths_deg würde exakt 360,0 sonst auf 0,0
      * zurückfalten). Schwelle eng um 360,0 (±0,05°) halten — nicht wie beim 1°-Arc (deg_to_arc_value)
      * bei 359,5°: sonst zeigt jeder Zehntelwert 359,5…359,9 fälschlich schon 360,0 statt des
-     * tatsächlich angefahrenen Winkels. Bei Span>360 (Typ 3) ist 361…span ohnehin normal darstellbar. */
+     * tatsächlich angefahrenen Winkels. Bei Span>360 ist 361…span ohnehin normal darstellbar. */
     if (span <= 360.5f && deg >= 359.95f) {
         snprintf(buf, n, "360,0");
         return;
@@ -1726,8 +1784,10 @@ static void on_arc(lv_event_t *e)
         s_arc_moved_this_press = true;
         const int v = lv_arc_get_value(arc);
         const int ant = static_cast<int>(pwm_config_get_last_antenna());
-        const float disp = bus_to_display_for_idx(
-            arc_value_to_bus_shortest(v, s_arc_drag_bus_ref_deg), ant);
+        const float drag_bus = arc_value_to_bus_shortest(v, s_arc_drag_bus_ref_deg);
+        /* Während Drag ist der Arc-Knauf das Ziel — Farbe nach Ziel-Umdrehung. */
+        lv_obj_set_style_bg_color(arc, lv_color_hex(arc_knob_color_for_bus(drag_bus)), LV_PART_KNOB);
+        const float disp = bus_to_display_for_idx(drag_bus, ant);
         s_encoder_target_deg = disp;
         char buf[16];
         fmt_taget_from_display_deg(buf, sizeof(buf), disp);
@@ -1829,7 +1889,7 @@ extern "C" void rotor_app_init(void)
         apply_axis_ui_after_switch();
     }
     s_pwm_ui_is_fast = pwm_config_get_pwm_ui_fast() != 0;
-    pwm_style_slow_fast(s_pwm_ui_is_fast);
+    apply_link_pwm_button_styles();
     if (objects.slow) {
         lv_obj_add_event_cb(objects.slow, on_slow_btn, LV_EVENT_CLICKED, nullptr);
     }
@@ -1923,7 +1983,7 @@ extern "C" void rotor_app_encoder_step(int delta_tenths)
         }
         if (ta) {
             const uint8_t v = id_field_display_or_saved_config(ta, kind);
-            const int min_id = (kind == 1) ? 0 : 1;
+            const int min_id = (kind == 2) ? 1 : 0;
             int nv = static_cast<int>(v) + sign;
             if (nv < min_id) {
                 nv = min_id;

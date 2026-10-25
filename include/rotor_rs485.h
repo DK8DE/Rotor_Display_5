@@ -92,8 +92,12 @@ uint8_t rotor_rs485_weather_ui_take_mask(void);
 
 /** Einmal GETREF (z. B. beim Start). */
 void rotor_rs485_send_getref(void);
-/** SETREF:1 — Homing starten; danach GETREF alle 200 ms bis referenziert. */
+/** SETREF:1 — Homing starten; danach GETREF alle 200 ms bis referenziert.
+ * Achse ohne Endschalter (GETENDSTC = 0) oder Absolutencoder (GETENCTYPE ≠ 1/2):
+ * nur SETREF:0 (Fehler quittieren, kein Homing). */
 void rotor_rs485_send_setref_homing(void);
+/** Aktive Achse hat Endschalter laut GETENDSTC (1/2); unbekannt = true. */
+bool rotor_rs485_axis_has_endstop(void);
 
 /** STOP:0 — weicher Stopp (Positionsfahrt beenden). true wenn gesendet. */
 bool rotor_rs485_send_stop(void);

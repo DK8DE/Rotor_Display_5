@@ -208,23 +208,16 @@ static void SingleClickCb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
-    /* Harte Fehler: kein Homing/Bus — nur UI-Feedback */
-    if (rotor_error_app_is_fault_locked()) {
+    /* Jeder Fehler: kurzer Tastendruck = SETREF — quittiert den Fehler am Rotor und startet
+     * Homing (ohne Endschalter nur Quittung, siehe rotor_rs485_send_setref_homing). */
+    if (rotor_error_app_get_error_code() != 0) {
+        rotor_rs485_send_setref_homing();
         lvgl_port_lock(-1);
         LVGL_button_event((void *)(intptr_t)BUTTON_SINGLE_CLICK);
         lvgl_port_unlock();
         return;
     }
     if (rotor_app_commit_id_field_on_hw_click()) {
-        lvgl_port_lock(-1);
-        LVGL_button_event((void *)(intptr_t)BUTTON_SINGLE_CLICK);
-        lvgl_port_unlock();
-        return;
-    }
-    /* Fehler 10 (Deadman / Verbindungstimeout): kurzer Tastendruck = SETREF:1 —
-     * quittiert den Fehler am Rotor und startet Homing (Normalzustand wiederherstellen). */
-    if (rotor_error_app_get_error_code() == 10) {
-        rotor_rs485_send_setref_homing();
         lvgl_port_lock(-1);
         LVGL_button_event((void *)(intptr_t)BUTTON_SINGLE_CLICK);
         lvgl_port_unlock();
@@ -241,7 +234,8 @@ static void SingleClickCb(void *button_handle, void *usr_data)
         const float snap = rotor_rs485_get_last_position_deg();
         rotor_app_snap_target_to_deg(snap);
         rotor_rs485_hw_snap_retarget_request(snap);
-    } else if (!rotor_rs485_is_referenced() && rotor_rs485_is_ref_state_known()) {
+    } else if (!rotor_rs485_is_referenced() && rotor_rs485_is_ref_state_known() &&
+               rotor_rs485_axis_has_endstop()) {
         /* Referenzfahrt nur für die per Long-Press aktive Achse und erst, wenn deren
          * Referenzstatus per GETREF bestätigt ist — sonst homt ein Klick direkt nach dem
          * Achsenwechsel eine bereits referenzierte Achse. */

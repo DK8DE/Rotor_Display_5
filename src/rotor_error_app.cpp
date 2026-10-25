@@ -1,7 +1,7 @@
 /**
  * Meldungen zu GETERR / async ERR; UI: meldetext, homing_led, Ring-Override in signals_ring_app.
- * Fehler bleiben bis Neustart, Ausnahme: Fehler 10 (Deadman / lokaler Verbindungstimeout) —
- * per Homing-Taste (SETREF) oder wiederkehrendem Slave-Verkehr / ACK_ERR:0 quittierbar.
+ * Alle Fehler werden per Homing-Taste (SETREF) oder ACK_ERR:0 vom Rotor quittiert;
+ * lokaler Verbindungstimeout (Soft-10) zusätzlich durch wiederkehrenden Slave-Verkehr.
  */
 
 #include "rotor_error_app.h"
@@ -63,20 +63,6 @@ static void apply_fault_meldetext_alternate(uint32_t now_ms)
     if (!objects.meldetext || s_err_code == 0) {
         return;
     }
-    /* Fehler 10: kein „Bitte Neustart“ — Quittierung per Homing-Taste (SETREF). */
-    if (s_err_code == 10) {
-        const uint32_t sec = now_ms / 1000u;
-        if (sec == s_meldetext_last_alternate_sec) {
-            return;
-        }
-        s_meldetext_last_alternate_sec = sec;
-        if ((sec % 2u) == 0u) {
-            lv_textarea_set_text(objects.meldetext, message_for_code(10));
-        } else {
-            lv_textarea_set_text(objects.meldetext, "Homing-Taste");
-        }
-        return;
-    }
     const uint32_t sec = now_ms / 1000u;
     if (sec == s_meldetext_last_alternate_sec) {
         return;
@@ -93,11 +79,12 @@ static void apply_fault_meldetext_alternate(uint32_t now_ms)
             lv_textarea_set_text(objects.meldetext, msg);
         }
     } else {
-        lv_textarea_set_text(objects.meldetext, "Bitte Neustart");
+        lv_textarea_set_text(objects.meldetext, "Homing-Taste");
     }
 }
 
-/** Remote-USB laut Config oder Bridge — Config gewinnt bei Kaltstart. */
+/** Remote-USB laut Config oder Bridge — Config gewinnt bei Kaltstart.
+ * Gilt für PC-USB und WEB (Browser-Relay): Display ist nicht Bus-Master. */
 static bool remote_usb_mode(void)
 {
     if (pwm_config_get_remote_usb() != 0u) {
@@ -250,7 +237,7 @@ void rotor_error_app_set_error_code(int code)
     if (code == 10 && (serial_bridge::remote_usb_active() || pwm_config_get_remote_usb() != 0u)) {
         return;
     }
-    /* Latch: Fehler bleibt bis Neustart — Ausnahme Fehler 10 (Deadman / Link) per SETREF quittierbar. */
+    /* Latch: Rotor-Fehler bleiben bis SETREF / ACK_ERR:0 (report_rotor_err) — hier nur Soft-10 löschbar. */
     if (code == 0) {
         if (s_err_code != 0 && s_err_code != 10) {
             return;
@@ -278,10 +265,7 @@ void rotor_error_app_report_rotor_err(int code)
         code = 0;
     }
     if (code == 0) {
-        /* ACK_ERR:0 / SETREF-Quittung: Fehler 10 löschen; andere Codes bleiben bis Neustart. */
-        if (s_err_code != 0 && s_err_code != 10) {
-            return;
-        }
+        /* ACK_ERR:0 / SETREF-Quittung: jeden Fehler löschen. */
         s_err_from_rotor = false;
         if (s_err_code != 0) {
             s_err_set_ms = millis();
@@ -343,7 +327,8 @@ bool rotor_error_app_is_fault_locked(void)
     if (s_err_code == 0) {
         return false;
     }
-    /* Fehler 10 (Deadman / Verbindungstimeout): Homing-Taste / SETREF quittiert — nicht sperren. */
+    /* Fehler 10 (Deadman / Verbindungstimeout): Bedienung bleibt frei. Andere Fehler sperren
+     * Fahrt/Touch bis zur Quittierung per Homing-Taste. */
     if (s_err_code == 10) {
         return false;
     }

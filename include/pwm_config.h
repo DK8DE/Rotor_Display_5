@@ -56,7 +56,8 @@ void pwm_config_set_opening_deg(int idx, float deg);
 uint8_t pwm_config_get_antdp(int idx);
 void pwm_config_set_antdp(int idx, uint8_t v_0_or_1);
 
-/** Encoder-Variante (Rotor GETENCTYPE): 1 = Axis/Motor, 2 = Ring, 3 = erweiterter Ring (z. B. 420°) — nur vom Rotor */
+/** Encoder-Variante (Rotor GETENCTYPE): 1 = Axis/Motor, 2 = Ring, 3 = Absolut-Encoder — nur vom Rotor.
+ * Fahrbereich > 360° (bis 720°) gilt für alle Typen über GETMAXDG. */
 uint8_t pwm_config_get_enc_type(void);
 void pwm_config_set_enc_type(uint8_t type_1_to_3);
 
@@ -78,8 +79,8 @@ float pwm_config_get_axis_max_deg(void);
 void pwm_config_set_axis_max_deg_raw(float raw_from_bus);
 
 /**
- * Wirksamer Fahrbereich in Grad: 360 (Typ 1/2 oder unplausibel) bzw. axis_max (Typ 3, typ. 420).
- * Plausibel nur wenn enc_type == 3 und axis_max in [360 … 720].
+ * Wirksamer Fahrbereich in Grad: axis_max (GETMAXDG, z. B. 420 oder 720) für alle Encoder-Typen 1/2/3.
+ * Unplausibel (< 360 oder > 720) → 360.
  */
 float pwm_config_get_axis_span_deg(void);
 
@@ -96,9 +97,17 @@ void pwm_config_set_anemometer(uint8_t on_0_or_1);
 /**
  * Controller Remote USB (GETCONREMOTE/SETCONREMOTE, JSON remote_usb):
  * 1 = kein RS485-TX zum Rotor, alles über USB zur PC-Software; 0 = normaler Bus-Betrieb.
+ * Wird von link_mode mitgeführt (PC-USB → 1, RS485/WEB → 0).
  */
 uint8_t pwm_config_get_remote_usb(void);
 void pwm_config_set_remote_usb(uint8_t on_0_or_1);
+
+/**
+ * Link-Modus (GETLINKMODE/SETLINKMODE, JSON link_mode):
+ * 0 = RS485 (Bus-Master), 1 = PC-USB (Remote USB / Desktop-Proxy), 2 = WEB (Browser Web Serial + RS485-Brücke).
+ */
+uint8_t pwm_config_get_link_mode(void);
+void pwm_config_set_link_mode(uint8_t mode_0_to_2);
 
 /** Encoder-Schritt in Zehntelgrad: 1 = 0,1°/Raste, 10 = 1°/Raste (GETCONDELTA/SETCONDELTA) */
 uint8_t pwm_config_get_encoder_delta_tenths(void);

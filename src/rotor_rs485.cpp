@@ -162,6 +162,8 @@ enum class Pending : uint8_t {
     GetTempA,
     GetWindDir,
     GetTempM,
+    GetEndStc,
+    GetAxisEncType,
     Test
 };
 
@@ -425,7 +427,7 @@ static uint8_t s_boot_param_timeout_count = 0;
 /** Nach erfolgreicher GETANTOFF-Kette: GETANGLE1→2→3 (Öffnungswinkel); phase 0 = inaktiv */
 static bool s_angle_boot_pending = false;
 static uint8_t s_angle_boot_phase = 0;
-/** Nach GETANGLE: GETENCTYPE → GETMAXDG (Fahrbereich / Encoder-Typ 3); phase 0 = inaktiv */
+/** Nach GETANGLE: GETENCTYPE → GETMAXDG (Encoder-Typ / Fahrbereich bis 720°); phase 0 = inaktiv */
 static bool s_enc_boot_pending = false;
 static uint8_t s_enc_boot_phase = 0;
 /** Nach GETMAXDG: GETANTNAME1→2→3 (Namen vom Rotor); phase 0 = inaktiv */
@@ -440,6 +442,21 @@ static uint8_t s_status_boot_phase = 0;
 static bool s_axis_switch_pos_refresh = false;
 /** Referenz der aktiven Slave-ID durch eigenes ACK_GETREF bestätigt (nach Achsenwechsel erst false). */
 static bool s_ref_state_known = false;
+/** HW-Taster/Fehler-10-Quittung während belegtem Bus: SETREF im nächsten freien Slot senden. */
+static bool s_setref_queued = false;
+/** Parameter des zuletzt gesendeten SETREF ("1" = Homing, "0" = nur Fehler quittieren). */
+static const char *s_setref_param = "1";
+/** GETENDSTC je Achse (0=AZ, 1=EL). s_endstc_learned_id = Slave-ID, für die der Wert gilt (0 = unbekannt). */
+static bool s_axis_has_endstop[2] = {true, true};
+static uint8_t s_endstc_learned_id[2] = {0u, 0u};
+static uint8_t s_endstc_timeout_count = 0;
+/** GETENCTYPE je Achse (1/2 inkremental, 3 SSI, 4 Inklinometer); 0 = unbekannt. */
+static uint8_t s_axis_enc_type[2] = {0u, 0u};
+static uint8_t s_enctype_learned_id[2] = {0u, 0u};
+static uint8_t s_axis_enctype_timeout_count = 0;
+#ifndef ROTOR_ENDSTC_MAX_TIMEOUTS
+#define ROTOR_ENDSTC_MAX_TIMEOUTS 3u
+#endif
 /** Achsenwechsel: GETREF an die neue Slave-ID, bis Antwort (auch als Mitläufer). */
 static bool s_axis_switch_getref_pending = false;
 static uint32_t s_axis_switch_getref_next_ms = 0;
@@ -568,6 +585,8 @@ static bool parse_ack_getangle2(const char *line);
 static bool parse_ack_getangle3(const char *line);
 static bool parse_ack_getenctype(const char *line);
 static bool parse_ack_getmaxdg(const char *line);
+static bool parse_endstc_reply(const char *line);
+static bool parse_axis_enctype_reply(const char *line);
 static bool parse_ack_getantname1(const char *line);
 static bool parse_ack_getantname2(const char *line);
 static bool parse_ack_getantname3(const char *line);
@@ -592,6 +611,7 @@ static void try_flush_setposcc(void);
 /** Bei Fehler stoppt der Slave — kein weiteres GETPOSDG-Polling / keine ausstehende Pos-Sync bis Recovery */
 static void stop_fault_motion_polling(void)
 {
+    s_setref_queued = false;
     s_poll_pos = false;
     s_pos_grace_end_ms = 0;
     s_align_target_after_pos_read = false;
@@ -744,6 +764,44 @@ bool rotor_rs485_is_boot_done(void) { return s_boot_done; }
 
 bool rotor_rs485_is_startup_error_checked(void) { return s_startup_err_known; }
 
+static void clear_pending();
+
+/** Software läuft schon: TEST/GETREF-Boot des Displays kommt oft nicht durch (USB-Proxy yield).
+ * Gespiegelte Slave-ACKs (Pos/Ref) reichen — sonst bleibt „Initialisiere“ trotz grünem Ring. */
+static void adopt_live_slave_as_boot_complete(void)
+{
+    if (!s_have_slave_rx_ever) {
+        return;
+    }
+    const bool remote_usb =
+        serial_bridge::remote_usb_active() || pwm_config_get_remote_usb() != 0u;
+    if (!remote_usb && !rotor_rs485_is_foreign_pc_listen_mode()) {
+        return;
+    }
+    if (s_pending == Pending::Test) {
+        clear_pending();
+    }
+    s_boot_test_done = true;
+    s_startup_err_known = true;
+    if (!s_boot_done) {
+        if (s_pending == Pending::GetRef || s_pending == Pending::GetPosDg ||
+            s_pending == Pending::GetErr) {
+            clear_pending();
+        }
+        s_boot_done = true;
+        s_boot_phase = 3;
+    }
+    /* Status-/EL-Boot-Ketten beenden — sonst bleibt UI in Boot-Logik hängen. */
+    if (s_status_boot_pending) {
+        s_status_boot_pending = false;
+        s_status_boot_phase = 0;
+    }
+    if (s_el_status_boot_pending) {
+        s_el_status_boot_pending = false;
+        s_el_status_boot_phase = 0;
+    }
+}
+
 bool rotor_rs485_is_referenced(void) { return s_slave_referenced; }
 
 static bool homing_active_internal(void)
@@ -838,6 +896,66 @@ static uint8_t axis_index_for_slave_id(unsigned id)
     return 0u;
 }
 
+static uint8_t configured_slave_id_for_axis(uint8_t axis)
+{
+    return (axis == 1u) ? pwm_config_get_rotor_el_id() : pwm_config_get_rotor_id();
+}
+
+static bool endstc_known_for_axis(uint8_t axis)
+{
+    const uint8_t id = configured_slave_id_for_axis(axis);
+    return id != 0u && s_endstc_learned_id[axis] == id;
+}
+
+static void store_endstc_for_slave(unsigned src, bool has_endstop)
+{
+    for (uint8_t axis = 0; axis < 2u; ++axis) {
+        const uint8_t id = configured_slave_id_for_axis(axis);
+        if (id != 0u && (unsigned)id == src) {
+            s_axis_has_endstop[axis] = has_endstop;
+            s_endstc_learned_id[axis] = id;
+        }
+    }
+}
+
+/** Unbekannt (noch keine Antwort / alte Firmware) = Endschalter vorhanden → Homing wie bisher. */
+bool rotor_rs485_axis_has_endstop(void)
+{
+    const uint8_t axis = axis_index_for_slave_id(s_slave_id);
+    if (!endstc_known_for_axis(axis)) {
+        return true;
+    }
+    return s_axis_has_endstop[axis];
+}
+
+static bool enctype_known_for_axis(uint8_t axis)
+{
+    const uint8_t id = configured_slave_id_for_axis(axis);
+    return id != 0u && s_enctype_learned_id[axis] == id;
+}
+
+static void store_enctype_for_slave(unsigned src, uint8_t type)
+{
+    for (uint8_t axis = 0; axis < 2u; ++axis) {
+        const uint8_t id = configured_slave_id_for_axis(axis);
+        if (id != 0u && (unsigned)id == src) {
+            s_axis_enc_type[axis] = type;
+            s_enctype_learned_id[axis] = id;
+        }
+    }
+}
+
+/** Absolutencoder (Typ ≠ 1/2, z. B. SSI / Inklinometer): kein Homing. Unbekannt = wie bisher. */
+static bool axis_is_absolute_encoder(void)
+{
+    const uint8_t axis = axis_index_for_slave_id(s_slave_id);
+    if (!enctype_known_for_axis(axis)) {
+        return false;
+    }
+    const uint8_t t = s_axis_enc_type[axis];
+    return t != 0u && t != 1u && t != 2u;
+}
+
 static void clear_remote_other_motion(void)
 {
     s_remote_other_motion = false;
@@ -902,8 +1020,8 @@ static float normalize_deg_0_360(float d)
     return x;
 }
 
-/** Positions-/Zielwinkel im wirksamen Fahrbereich (360 oder Typ-3-Span, z. B. 420).
- * Vor GETENCTYPE/GETMAXDG ist der Span noch 360 — Rohwerte >360 (Typ 3) nicht falten,
+/** Positions-/Zielwinkel im wirksamen Fahrbereich (360 oder GETMAXDG-Span, z. B. 420/720).
+ * Vor GETMAXDG ist der Span noch 360 — Rohwerte >360 nicht falten,
  * sonst wird z. B. 372° → 12° und bleibt falsch in der Anzeige. */
 static float normalize_deg_span(float d)
 {
@@ -915,7 +1033,7 @@ static float normalize_deg_span(float d)
         }
         return x;
     }
-    /* Span noch unbekannt / Typ 1–2: Werte knapp über 360 bis GETMAXDG behalten */
+    /* Span noch unbekannt: Werte über 360 bis GETMAXDG behalten */
     if (d > 360.5f && d <= 720.0f) {
         return d;
     }
@@ -1247,9 +1365,9 @@ void rotor_rs485_request_el_rotor_type(void)
 void rotor_rs485_send_setref_homing(void)
 {
     /* Laufende Positions-Telegramme abbrechen, sonst blockiert pending == SetPosDg den Homing-Start.
-     * Bei Fehler 10 (Deadman-Quittung) jedes Pending verwerfen — SETREF muss raus. */
-    const bool force_for_err10 = (rotor_error_app_get_error_code() == 10);
-    if (s_pending == Pending::SetPosDg || s_pending == Pending::GetPosDg || force_for_err10) {
+     * Bei Fehler (Quittung per Homing) jedes Pending verwerfen — SETREF muss raus. */
+    const bool force_for_err = (rotor_error_app_get_error_code() != 0);
+    if (s_pending == Pending::SetPosDg || s_pending == Pending::GetPosDg || force_for_err) {
         if (s_pending != Pending::None) {
             clear_pending();
         }
@@ -1259,14 +1377,23 @@ void rotor_rs485_send_setref_homing(void)
         s_setposdg_retry_count = 0;
         s_resume_poll_pos_after_conn_loss = false;
     } else if (s_pending != Pending::None) {
+        s_setref_queued = true;
         return;
     }
-    /* SETREF quittiert Fehler 10 (Deadman) am Rotor — lokal sofort freigeben. */
-    if (rotor_error_app_get_error_code() == 10) {
+    s_setref_queued = false;
+    /* SETREF quittiert jeden Fehler am Rotor — lokal sofort freigeben. */
+    if (rotor_error_app_get_error_code() != 0) {
         rotor_error_app_report_rotor_err(0);
-        rotor_error_app_set_error_code(0);
     }
-    send_request("SETREF", "1", Pending::SetRef);
+    /* Absolutencoder (Typ ≠ 1/2): Fehler nur mit SETREF:0 quittieren.
+     * Ohne Endschalter würde SETREF:1 die aktuelle Lage als Nullpunkt setzen — ebenfalls nur quittieren. */
+    if (axis_is_absolute_encoder() || !rotor_rs485_axis_has_endstop()) {
+        s_setref_param = "0";
+        send_request("SETREF", s_setref_param, Pending::SetRef);
+        return;
+    }
+    s_setref_param = "1";
+    send_request("SETREF", s_setref_param, Pending::SetRef);
     s_poll_ref = true;
     s_request_pos_after_homing = true;
     s_homing_wait_unref_seen = true;
@@ -1811,6 +1938,7 @@ static void sniff_setantdp_to_slave(const char *line)
         }
         tmp[n] = '\0';
         pwm_config_set_antdp(tags[i].idx, (uint8_t)(atoi(tmp) != 0));
+        s_pending_antenna_offset_notify = true;
         return;
     }
 }
@@ -2257,6 +2385,38 @@ static bool handle_local_config_command(const char *line, unsigned src, unsigned
         return true;
     }
 
+    if (strstr(line, ":GETLINKMODE:")) {
+        if (!CFG_TRY_TAG(":GETLINKMODE:")) {
+            config_reply_nak(src, "NAK_GETLINKMODE", 2);
+            return true;
+        }
+        config_reply_ack_u8(src, "ACK_GETLINKMODE", pwm_config_get_link_mode());
+        return true;
+    }
+
+    if (strstr(line, ":SETLINKMODE:")) {
+        if (!CFG_TRY_TAG(":SETLINKMODE:")) {
+            config_reply_nak(src, "NAK_SETLINKMODE", 2);
+            return true;
+        }
+        unsigned v = 0;
+        if (sscanf(par, "%u", &v) != 1 || v > 2u) {
+            config_reply_nak(src, "NAK_SETLINKMODE", 1);
+            return true;
+        }
+        const uint8_t prev_remote = pwm_config_get_remote_usb();
+        pwm_config_set_link_mode((uint8_t)v);
+        schedule_pwm_config_save_from_bus_now();
+        s_pending_config_changed_from_bus = true;
+        config_reply_ack_u8(src, "ACK_SETLINKMODE", (uint8_t)v);
+        const uint8_t rem = pwm_config_get_remote_usb();
+        serial_bridge::set_remote_usb(rem != 0u);
+        if (prev_remote != rem) {
+            rotor_rs485_relink();
+        }
+        return true;
+    }
+
     if (strstr(line, ":GETCONDELTA:")) {
         if (!CFG_TRY_TAG(":GETCONDELTA:")) {
             config_reply_nak(src, "NAK_GETCONDELTA", 2);
@@ -2407,13 +2567,12 @@ static void dispatch_bus_command_to_slave(const char *line, unsigned src)
         return;
     }
 
-    /* PC-Client (anderer Master): SETREF → Fehler 10 quittieren; SETREF:1 → Homing-Flags. */
+    /* PC-Client (anderer Master): SETREF → Fehler quittieren; SETREF:1 → Homing-Flags. */
     if (src != (unsigned)s_master_id) {
         int ref_cmd = 0;
         if (parse_setref_command_param(line, &ref_cmd)) {
-            if (rotor_error_app_get_error_code() == 10) {
+            if (rotor_error_app_get_error_code() != 0) {
                 rotor_error_app_report_rotor_err(0);
-                rotor_error_app_set_error_code(0);
             }
             if (ref_cmd != 0) {
                 s_poll_ref = true;
@@ -2492,6 +2651,7 @@ static bool listen_inactive_slave_ack(const char *line, unsigned src)
     if (!is_inactive_rotor_slave(src)) {
         return false;
     }
+    (void)parse_axis_enctype_reply(line);
     /* GETASELECT / ANTOFF/ANTDP/ANGLE/…-ACK vom AZ während EL aktiv (Boot an AZ-ID). */
     if (src == (unsigned)pwm_config_get_rotor_id() && boot_param_chain_active()) {
         if (parse_ack_getaselect(line) || parse_ack_getantoff1(line) || parse_ack_getantoff2(line) ||
@@ -2503,6 +2663,10 @@ static bool listen_inactive_slave_ack(const char *line, unsigned src)
         }
     }
     const uint8_t axis = axis_index_for_slave_id(src);
+
+    if (parse_endstc_reply(line)) {
+        return true;
+    }
 
     if (strstr(line, ":ACK_GETREF:")) {
         const char *p = strstr(line, ":ACK_GETREF:");
@@ -2651,8 +2815,34 @@ static void on_ack_timeout()
         break;
     }
     case Pending::SetRef:
-        send_request("SETREF", "1", Pending::SetRef);
+        send_request("SETREF", s_setref_param, Pending::SetRef);
         break;
+    case Pending::GetEndStc: {
+        const uint8_t axis = axis_index_for_slave_id(s_slave_id);
+        if (++s_endstc_timeout_count >= ROTOR_ENDSTC_MAX_TIMEOUTS) {
+            /* Keine Antwort: Default (Endschalter vorhanden) für diese ID festhalten. */
+            clear_pending();
+            s_endstc_learned_id[axis] = configured_slave_id_for_axis(axis);
+            s_axis_has_endstop[axis] = true;
+            s_endstc_timeout_count = 0;
+        } else {
+            send_request("GETENDSTC", "0", Pending::GetEndStc);
+        }
+        break;
+    }
+    case Pending::GetAxisEncType: {
+        const uint8_t axis = axis_index_for_slave_id(s_slave_id);
+        if (++s_axis_enctype_timeout_count >= ROTOR_ENDSTC_MAX_TIMEOUTS) {
+            /* Keine Antwort: unbekannt lassen (= Verhalten wie bisher), nicht erneut fragen. */
+            clear_pending();
+            s_enctype_learned_id[axis] = configured_slave_id_for_axis(axis);
+            s_axis_enc_type[axis] = 0u;
+            s_axis_enctype_timeout_count = 0;
+        } else {
+            send_request("GETENCTYPE", "0", Pending::GetAxisEncType);
+        }
+        break;
+    }
     case Pending::Stop:
         send_request("STOP", "0", Pending::Stop);
         break;
@@ -2900,15 +3090,85 @@ static bool parse_ack_setref_result(const char *line)
     if (s_pending == Pending::SetRef) {
         clear_pending();
     }
-    /* SETREF quittiert Deadman/Timeout am Rotor — Latch lokal mitnehmen. */
-    if (rotor_error_app_get_error_code() == 10) {
+    /* SETREF quittiert jeden Fehler am Rotor — Latch lokal mitnehmen. */
+    if (rotor_error_app_get_error_code() != 0) {
         rotor_error_app_report_rotor_err(0);
-        rotor_error_app_set_error_code(0);
     }
     if (s_poll_ref) {
         s_next_ref_poll_ms = millis() + ROTOR_POLL_GAP_MS;
     }
     return true;
+}
+
+/** ACK_GETENDSTC:<0|1|2> (auch mitgehört / inaktive Achse); NAK (alte Firmware) = Endschalter vorhanden. */
+static bool parse_endstc_reply(const char *line)
+{
+    const char *ack = strstr(line, ":ACK_GETENDSTC:");
+    const bool nak = (ack == nullptr) && (strstr(line, ":NAK_GETENDSTC:") != nullptr);
+    if (!ack && !nak) {
+        return false;
+    }
+    unsigned src = 0;
+    unsigned dst = 0;
+    if (line_src_dst(line, &src, &dst)) {
+        const bool has = nak ? true : (atoi(ack + strlen(":ACK_GETENDSTC:")) != 0);
+        store_endstc_for_slave(src, has);
+    }
+    if (s_pending == Pending::GetEndStc && src == (unsigned)s_slave_id) {
+        clear_pending();
+        s_endstc_timeout_count = 0;
+    }
+    return true;
+}
+
+/** ACK_GETENCTYPE je Achse mitschreiben. true nur, wenn es die Antwort auf unser
+ * GetAxisEncType war — sonst weiter an den Boot-Parser (AZ-Encoder-Typ / GETMAXDG-Kette). */
+static bool parse_axis_enctype_reply(const char *line)
+{
+    const char *ack = strstr(line, ":ACK_GETENCTYPE:");
+    const bool nak = (ack == nullptr) && (strstr(line, ":NAK_GETENCTYPE:") != nullptr);
+    if (!ack && !nak) {
+        return false;
+    }
+    unsigned src = 0;
+    unsigned dst = 0;
+    if (!line_src_dst(line, &src, &dst)) {
+        return false;
+    }
+    if (ack) {
+        const int t = atoi(ack + strlen(":ACK_GETENCTYPE:"));
+        if (t >= 1 && t <= 255) {
+            store_enctype_for_slave(src, (uint8_t)t);
+        }
+    }
+    if (s_pending == Pending::GetAxisEncType && src == (unsigned)s_slave_id) {
+        if (nak) {
+            store_enctype_for_slave(src, 0u);
+        }
+        clear_pending();
+        s_axis_enctype_timeout_count = 0;
+        return true;
+    }
+    return false;
+}
+
+/** Nach Boot: GETENDSTC und GETENCTYPE einmal je aktiver Slave-ID (nach Achsenwechsel / ID-Änderung erneut). */
+static void try_endstc_step(void)
+{
+    if (!s_boot_done || s_slave_id == 0u || s_pending != Pending::None) {
+        return;
+    }
+    const uint8_t axis = axis_index_for_slave_id(s_slave_id);
+    if (configured_slave_id_for_axis(axis) != s_slave_id) {
+        return;
+    }
+    if (!endstc_known_for_axis(axis)) {
+        send_request("GETENDSTC", "0", Pending::GetEndStc);
+        return;
+    }
+    if (!enctype_known_for_axis(axis)) {
+        send_request("GETENCTYPE", "0", Pending::GetAxisEncType);
+    }
 }
 
 static bool parse_ack_test(const char *line)
@@ -4148,6 +4408,12 @@ static void process_complete_line(const char *line, size_t len)
         if (parse_slave_err(line)) {
             return;
         }
+        if (parse_endstc_reply(line)) {
+            return;
+        }
+        if (parse_axis_enctype_reply(line)) {
+            return;
+        }
         if (parse_nak_and_clear(line)) {
             return;
         }
@@ -4944,6 +5210,14 @@ void rotor_rs485_loop(void)
 
     on_ack_timeout();
 
+    if (s_setref_queued && s_pending == Pending::None) {
+        if (s_slave_referenced && !s_poll_ref) {
+            s_setref_queued = false;
+        } else {
+            rotor_rs485_send_setref_homing();
+        }
+    }
+
     /* Vor pending-Return: wartet auf freien Bus (z. B. GETANGLE1…3 nach Boot) — sonst kein erneuter SETPOSDG-Versuch. */
     try_hw_snap_retarget();
 
@@ -4952,16 +5226,23 @@ void rotor_rs485_loop(void)
     try_flush_setposcc();
 
     if (rotor_rs485_is_foreign_pc_listen_mode() && s_pending != Pending::None) {
-        /* Proxy aktiv: Wetter/Ref/Pos-Polling nicht stauen — Boot-Lesevorgänge ausnehmen. */
+        /* Proxy aktiv: Wetter/Ref/Pos-Polling nicht stauen — Boot-Lesevorgänge ausnehmen.
+         * Solange Status-Boot / Startup offen: GETREF/GETPOSDG/GETERR nicht verwerfen
+         * (sonst „Initialisiere“ + gesperrte Display-Bedienung bei WEB/USB). */
+        const bool keep_status_boot =
+            s_status_boot_pending || s_el_status_boot_pending || !s_boot_done || !s_startup_err_known;
         switch (s_pending) {
         case Pending::GetAnemo:
         case Pending::GetTempA:
         case Pending::GetWindDir:
         case Pending::GetTempM:
+            clear_pending();
+            break;
         case Pending::GetErr:
         case Pending::GetRef:
         case Pending::GetPosDg:
-            if (!s_status_boot_pending) {
+        case Pending::Test:
+            if (!keep_status_boot) {
                 clear_pending();
             }
             break;
@@ -4969,6 +5250,8 @@ void rotor_rs485_loop(void)
             break;
         }
     }
+
+    adopt_live_slave_as_boot_complete();
 
     if (s_pending != Pending::None) {
         return;
@@ -4981,21 +5264,7 @@ void rotor_rs485_loop(void)
     }
 
     if (rotor_rs485_is_foreign_pc_listen_mode()) {
-        /* Eigenes TEST-BOOT laeuft nicht (return vor try_boot_test). Sobald der Slave am Bus
-         * antwortet (Fremd-Master pollt), ist der Link real — Startup-GETERR-Pfad ueberspringen,
-         * sonst bleiben Meldetext „Initialisiere“ und homing_led rot trotz gruenem Ring (Ref aus ACK). */
-        if (!s_startup_err_known) {
-            if (s_boot_test_done) {
-                s_startup_err_known = true;
-            } else if (s_have_slave_rx_ever) {
-                s_boot_test_done = true;
-                s_startup_err_known = true;
-            }
-        }
-        if (s_have_slave_rx_ever && !s_boot_done) {
-            s_boot_done = true;
-            s_boot_phase = 3;
-        }
+        /* Eigenes TEST-BOOT laeuft nicht (return vor try_boot_test). */
         try_aselect_boot_step();
         if (s_pending != Pending::None) {
             return;
@@ -5101,6 +5370,13 @@ void rotor_rs485_loop(void)
 
     if (s_pending != Pending::None) {
         return;
+    }
+
+    if (!s_el_status_boot_pending) {
+        try_endstc_step();
+        if (s_pending != Pending::None) {
+            return;
+        }
     }
 
     if (s_poll_pos || s_ka_active) {

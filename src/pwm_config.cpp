@@ -28,6 +28,8 @@ static uint8_t s_touch_beep_vol = 14;
 static uint8_t s_anemometer = 0;
 /** GETCONREMOTE/SETCONREMOTE — Controller Remote USB (1) / normaler RS485 (0) */
 static uint8_t s_remote_usb = 0;
+/** GETLINKMODE/SETLINKMODE — 0=RS485, 1=PC-USB, 2=WEB */
+static uint8_t s_link_mode = 0;
 /** GETCONDELTA/SETCONDELTA — Zehntel pro Encoder-Raste: 1 = 0,1° oder 10 = 1°; Standard 10 */
 static uint8_t s_encoder_delta_tenths = 10;
 /** GETCONCHA/SETCONCHA — Antennenwechsel: 1 = taget behalten, 0 = taget = Ist-Anzeige */
@@ -95,6 +97,7 @@ void pwm_config_load_defaults(void)
     s_touch_beep_vol = 14;
     s_anemometer = 0;
     s_remote_usb = 0;
+    s_link_mode = 0;
     s_encoder_delta_tenths = 10;
     s_concha = 0;
     s_led_ring_brightness_pct = 100;
@@ -123,6 +126,7 @@ static size_t render_config_json(char *out, size_t sz)
              "  \"lsl\": %u,\n"
              "  \"anemometer\": %u,\n"
              "  \"remote_usb\": %u,\n"
+             "  \"link_mode\": %u,\n"
              "  \"encoder_delta\": %u,\n"
              "  \"concha\": %u,\n"
              "  \"conledp\": %u\n"
@@ -130,8 +134,8 @@ static size_t render_config_json(char *out, size_t sz)
              (unsigned)s_slow, (unsigned)s_fast, (unsigned)s_pwm_ui_fast, (unsigned)s_master_id,
              (unsigned)s_rotor_id, (unsigned)s_rotor_el_id,
              (unsigned)s_last_antenna, (unsigned)s_touch_beep_freq_hz, (unsigned)s_touch_beep_vol,
-             (unsigned)s_anemometer, (unsigned)s_remote_usb, (unsigned)s_encoder_delta_tenths,
-             (unsigned)s_concha, (unsigned)s_led_ring_brightness_pct);
+             (unsigned)s_anemometer, (unsigned)s_remote_usb, (unsigned)s_link_mode,
+             (unsigned)s_encoder_delta_tenths, (unsigned)s_concha, (unsigned)s_led_ring_brightness_pct);
     if (n < 0 || (size_t)n >= sz) {
         out[0] = '\0';
         return 0;
@@ -196,6 +200,15 @@ void pwm_config_load(void)
     int rem = parse_int_after_key(buf, "remote_usb");
     if (rem == 0 || rem == 1) {
         s_remote_usb = (uint8_t)rem;
+    }
+    int lm = parse_int_after_key(buf, "link_mode");
+    if (lm >= 0 && lm <= 2) {
+        s_link_mode = (uint8_t)lm;
+        /* PC-USB (1) und WEB (2): Display ist nicht Bus-Master (Remote-USB-Verhalten). */
+        s_remote_usb = (s_link_mode != 0u) ? 1u : 0u;
+    } else if (rem == 0 || rem == 1) {
+        /* Alte Config ohne link_mode: aus remote_usb ableiten */
+        s_link_mode = (s_remote_usb != 0u) ? 1u : 0u;
     }
     int ed = parse_int_after_key(buf, "encoder_delta");
     if (ed == 1 || ed == 10) {
@@ -459,7 +472,7 @@ void pwm_config_set_axis_max_deg_raw(float raw_from_bus)
 
 float pwm_config_get_axis_span_deg(void)
 {
-    if (s_enc_type == 3u && s_axis_max_deg >= 360.0f && s_axis_max_deg <= 720.0f) {
+    if (s_axis_max_deg >= 360.0f && s_axis_max_deg <= 720.0f) {
         return s_axis_max_deg;
     }
     return 360.0f;
@@ -515,7 +528,32 @@ void pwm_config_set_remote_usb(uint8_t on_0_or_1)
             s_last_written_valid = false;
         }
         s_remote_usb = on_0_or_1;
+        if (on_0_or_1 != 0u) {
+            /* WEB (2) bleibt WEB; sonst PC-USB */
+            if (s_link_mode == 0u) {
+                s_link_mode = 1u;
+            }
+        } else {
+            s_link_mode = 0u;
+        }
     }
+}
+
+uint8_t pwm_config_get_link_mode(void)
+{
+    return s_link_mode;
+}
+
+void pwm_config_set_link_mode(uint8_t mode_0_to_2)
+{
+    if (mode_0_to_2 > 2u) {
+        return;
+    }
+    if (s_link_mode != mode_0_to_2) {
+        s_last_written_valid = false;
+    }
+    s_link_mode = mode_0_to_2;
+    s_remote_usb = (s_link_mode != 0u) ? 1u : 0u;
 }
 
 uint8_t pwm_config_get_encoder_delta_tenths(void)

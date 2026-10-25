@@ -560,7 +560,13 @@ void hw_send(const uint8_t *data, size_t len)
     if (!s_remote_usb && rotor_rs485_is_foreign_pc_listen_mode() && is_controller_poll_frame(data, len)) {
         /* Ausnahme: einmalige Versatz-/Dipol-/Winkel-Boot-Reads müssen auch als Mitläufer auf den Bus,
          * sonst kennt der Controller die Antennenversätze nie (stehen nur im Rotor-RAM). */
-        if (!(rotor_rs485_boot_read_in_progress() && is_antenna_boot_read_frame(data, len))) {
+        const bool antenna_boot =
+            rotor_rs485_boot_read_in_progress() && is_antenna_boot_read_frame(data, len);
+        /* Status-Boot (TEST/GETREF/GETPOSDG/GETERR) darf nicht an PcProxy scheitern —
+         * sonst bleibt Meldetext „Initialisiere“ und die Display-Bedienung gesperrt. */
+        const bool status_boot_open =
+            !rotor_rs485_is_boot_done() || !rotor_rs485_is_startup_error_checked();
+        if (!antenna_boot && !status_boot_open) {
             return;
         }
     }

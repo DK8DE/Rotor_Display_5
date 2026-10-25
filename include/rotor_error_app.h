@@ -23,8 +23,8 @@ void rotor_error_app_set_error_code(int code);
 
 /**
  * Fehler vom Rotor (asynchrones ERR / ACK_ERR).
- * Code 10 (Deadman): quittierbar per SETREF / Homing-Taste (kein Neustart nötig).
- * ACK_ERR:0 → report_rotor_err(0) quittiert Fehler 10.
+ * Alle Codes quittierbar per SETREF / Homing-Taste (kein Neustart nötig).
+ * report_rotor_err(0) (ACK_ERR:0 / SETREF) löscht jeden Fehler.
  */
 void rotor_error_app_report_rotor_err(int code);
 
